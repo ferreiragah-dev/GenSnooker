@@ -263,6 +263,10 @@ video {
   gap: 8px;
 }
 
+#focus-manual-wrap input {
+  width: 100%;
+}
+
 hr {
   width: 100%;
   border: none;

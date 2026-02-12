@@ -9,6 +9,7 @@ const state = {
   maxBall: 7,
   running: false,
   stream: null,
+  videoTrack: null,
   rafId: 0,
   prevGray: null,
   motionThreshold: 6,
@@ -29,6 +30,8 @@ const state = {
   tableQuad: null,
   pockets: [],
   trackedBalls: {},
+  focusSupported: false,
+  focusManualSupported: false,
   missingCounters: {
     white: 0,
     1: 0,
@@ -78,6 +81,11 @@ const refs = {
   gameLabel: document.querySelector('#game-label'),
   secureBanner: document.querySelector('#secure-banner'),
   opencvState: document.querySelector('#opencv-state'),
+  focusState: document.querySelector('#focus-state'),
+  focusAutoWrap: document.querySelector('#focus-auto-wrap'),
+  focusAuto: document.querySelector('#focus-auto'),
+  focusManualWrap: document.querySelector('#focus-manual-wrap'),
+  focusRange: document.querySelector('#focus-range'),
   calibrationState: document.querySelector('#calibration-state'),
   pocketCalibrationState: document.querySelector('#pocket-calibration-state'),
   tableState: document.querySelector('#table-state'),
@@ -490,6 +498,98 @@ async function loadRecentMatches() {
   }
 }
 
+function resetFocusControls() {
+  state.focusSupported = false;
+  state.focusManualSupported = false;
+  refs.focusState.textContent = 'indisponivel';
+  refs.focusAutoWrap.classList.add('hidden');
+  refs.focusManualWrap.classList.add('hidden');
+  refs.focusAuto.checked = true;
+  refs.focusRange.value = '50';
+  refs.focusRange.disabled = true;
+}
+
+async function applyFocusConstraint({ autoMode, distance }) {
+  if (!state.videoTrack) {
+    return;
+  }
+
+  const capabilities = state.videoTrack.getCapabilities ? state.videoTrack.getCapabilities() : {};
+  const focusModes = Array.isArray(capabilities.focusMode) ? capabilities.focusMode : [];
+  const supportsManualMode = focusModes.includes('manual');
+  const supportsContinuousMode = focusModes.includes('continuous');
+
+  const advanced = {};
+  if (autoMode) {
+    if (supportsContinuousMode) {
+      advanced.focusMode = 'continuous';
+    }
+  } else {
+    if (supportsManualMode) {
+      advanced.focusMode = 'manual';
+    }
+    if (capabilities.focusDistance && typeof distance === 'number') {
+      advanced.focusDistance = distance;
+    }
+  }
+
+  if (!Object.keys(advanced).length) {
+    return;
+  }
+
+  try {
+    await state.videoTrack.applyConstraints({ advanced: [advanced] });
+    if (autoMode) {
+      refs.focusState.textContent = 'autofoco ativo';
+    } else {
+      refs.focusState.textContent = `manual (${Number(distance).toFixed(2)})`;
+    }
+  } catch (_error) {
+    refs.focusState.textContent = 'falha ao aplicar foco';
+  }
+}
+
+async function setupFocusControls(track) {
+  resetFocusControls();
+  state.videoTrack = track;
+
+  const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+  const settings = track.getSettings ? track.getSettings() : {};
+  const hasFocusDistance = Boolean(capabilities.focusDistance);
+  const focusModes = Array.isArray(capabilities.focusMode) ? capabilities.focusMode : [];
+  const hasAuto = focusModes.includes('continuous') || focusModes.includes('single-shot');
+  const hasManual = focusModes.includes('manual') || hasFocusDistance;
+
+  if (!hasAuto && !hasManual && !hasFocusDistance) {
+    refs.focusState.textContent = 'nao suportado neste dispositivo';
+    return;
+  }
+
+  state.focusSupported = true;
+  state.focusManualSupported = hasManual && hasFocusDistance;
+  refs.focusAutoWrap.classList.toggle('hidden', !hasAuto && !hasManual);
+  refs.focusManualWrap.classList.toggle('hidden', !state.focusManualSupported);
+  refs.focusAuto.checked = hasAuto;
+
+  if (state.focusManualSupported) {
+    const min = capabilities.focusDistance.min ?? 0;
+    const max = capabilities.focusDistance.max ?? 100;
+    const step = capabilities.focusDistance.step ?? 1;
+    const initial = settings.focusDistance ?? ((min + max) / 2);
+    refs.focusRange.min = String(min);
+    refs.focusRange.max = String(max);
+    refs.focusRange.step = String(step);
+    refs.focusRange.value = String(initial);
+    refs.focusRange.disabled = refs.focusAuto.checked;
+  }
+
+  if (refs.focusAuto.checked) {
+    await applyFocusConstraint({ autoMode: true });
+  } else if (state.focusManualSupported) {
+    await applyFocusConstraint({ autoMode: false, distance: Number(refs.focusRange.value) });
+  }
+}
+
 async function startCamera() {
   if (state.stream) {
     return;
@@ -506,9 +606,15 @@ async function startCamera() {
     });
 
     state.stream = stream;
+    state.videoTrack = stream.getVideoTracks()[0] || null;
     refs.video.srcObject = stream;
     await refs.video.play();
     logEvent('Camera ligada com sucesso.', { eventType: 'camera_on' });
+    if (state.videoTrack) {
+      await setupFocusControls(state.videoTrack);
+    } else {
+      resetFocusControls();
+    }
 
     state.prevGray = null;
     if (state.rafId) {
@@ -534,6 +640,7 @@ function stopCamera() {
   }
 
   refs.video.srcObject = null;
+  state.videoTrack = null;
   state.prevGray = null;
   state.moving = false;
   state.calibrationMode = false;
@@ -553,6 +660,7 @@ function stopCamera() {
   refs.pocketCalibrationState.textContent = 'automatica';
   refs.pocketsState.textContent = '0/6';
   refs.detectedBalls.textContent = 'nenhuma';
+  resetFocusControls();
   if (overlayCtx) {
     overlayCtx.clearRect(0, 0, refs.overlayCanvas.width, refs.overlayCanvas.height);
   }
@@ -1378,6 +1486,21 @@ function bindEvents() {
   refs.overlayCanvas.addEventListener('click', onOverlayClick);
   refs.threshold.addEventListener('input', onThresholdChange);
   refs.gameType.addEventListener('change', onGameTypeChange);
+  refs.focusAuto.addEventListener('change', async (event) => {
+    const autoMode = event.target.checked;
+    refs.focusRange.disabled = autoMode || !state.focusManualSupported;
+    if (autoMode) {
+      await applyFocusConstraint({ autoMode: true });
+    } else if (state.focusManualSupported) {
+      await applyFocusConstraint({ autoMode: false, distance: Number(refs.focusRange.value) });
+    }
+  });
+  refs.focusRange.addEventListener('input', async (event) => {
+    if (refs.focusAuto.checked || !state.focusManualSupported) {
+      return;
+    }
+    await applyFocusConstraint({ autoMode: false, distance: Number(event.target.value) });
+  });
   refs.autoReferee.addEventListener('change', (event) => {
     state.autoReferee = event.target.checked;
     logEvent(`Arbitragem automatica ${state.autoReferee ? 'ativada' : 'desativada'}.`, {
@@ -1396,6 +1519,7 @@ function init() {
   applyGameMode(state.gameType);
   refs.gameType.value = state.gameType;
   refs.targetPoints.value = String(getGameMode().targetPoints);
+  resetFocusControls();
   buildManualButtons();
   renderScoreboard();
   onThresholdChange();

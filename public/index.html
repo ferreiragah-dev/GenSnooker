@@ -103,6 +103,15 @@
             <hr />
 
             <p><strong>OpenCV:</strong> <span id="opencv-state">carregando...</span></p>
+            <p><strong>Foco camera:</strong> <span id="focus-state">nao configurado</span></p>
+            <label id="focus-auto-wrap" class="inline-control hidden">
+              <input id="focus-auto" type="checkbox" checked />
+              Autofoco
+            </label>
+            <label id="focus-manual-wrap" class="hidden">
+              Ajuste de foco manual
+              <input id="focus-range" type="range" min="0" max="100" step="1" value="50" />
+            </label>
             <label class="inline-control">
               <input id="auto-referee" type="checkbox" checked />
               Ativar arbitragem automatica

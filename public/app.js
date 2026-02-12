@@ -26,6 +26,8 @@ const state = {
   pocketCalibrationMode: false,
   pocketCalibrationPoints: [],
   manualPockets: null,
+  ballTracks: {},
+  trackingTimestampMs: 0,
   frameCounter: 0,
   tableQuad: null,
   pockets: [],
@@ -139,6 +141,9 @@ const TRACKING_CONFIG = {
   minCircularity: 0.62,
   maxPerColor: 1,
   smoothingAlpha: 0.42,
+  maxJumpPx: 42,
+  maxMisses: 8,
+  minTrackConfidence: 0.2,
 };
 
 const GAME_MODES = {
@@ -650,6 +655,8 @@ function stopCamera() {
   state.tableQuad = null;
   state.manualTableQuad = null;
   state.manualPockets = null;
+  state.ballTracks = {};
+  state.trackingTimestampMs = 0;
   state.pockets = [];
   state.trackedBalls = {};
   refs.motionState.textContent = 'Parado';
@@ -951,26 +958,103 @@ function mapCircleFromWarp(circle, inverseMatrix) {
   };
 }
 
-function smoothTrackedBalls(nextTrackedBalls) {
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function createTrackFromDetection(detection) {
+  return {
+    x: detection.x,
+    y: detection.y,
+    r: detection.r,
+    vx: 0,
+    vy: 0,
+    misses: 0,
+    confidence: 0.55,
+  };
+}
+
+function updateTrackWithDetection(track, detection, dt) {
   const alpha = TRACKING_CONFIG.smoothingAlpha;
-  const smoothed = {};
+  const newX = (track.x * (1 - alpha)) + (detection.x * alpha);
+  const newY = (track.y * (1 - alpha)) + (detection.y * alpha);
+  const newR = (track.r * (1 - alpha)) + (detection.r * alpha);
+  const vxMeasured = (newX - track.x) / Math.max(dt, 0.001);
+  const vyMeasured = (newY - track.y) / Math.max(dt, 0.001);
 
-  for (const key of Object.keys(BALL_PROFILES)) {
-    const prev = state.trackedBalls[key] && state.trackedBalls[key][0];
-    const curr = nextTrackedBalls[key] && nextTrackedBalls[key][0];
+  track.vx = (track.vx * 0.55) + (vxMeasured * 0.45);
+  track.vy = (track.vy * 0.55) + (vyMeasured * 0.45);
+  track.x = newX;
+  track.y = newY;
+  track.r = newR;
+  track.misses = 0;
+  track.confidence = clampNumber(track.confidence + 0.12, 0, 1);
+}
 
-    if (prev && curr) {
-      smoothed[key] = [{
-        x: (prev.x * (1 - alpha)) + (curr.x * alpha),
-        y: (prev.y * (1 - alpha)) + (curr.y * alpha),
-        r: (prev.r * (1 - alpha)) + (curr.r * alpha),
-      }];
-    } else {
-      smoothed[key] = curr ? [curr] : [];
+function predictTrack(track, dt) {
+  track.x += track.vx * dt;
+  track.y += track.vy * dt;
+  track.vx *= 0.9;
+  track.vy *= 0.9;
+  track.misses += 1;
+  track.confidence = clampNumber(track.confidence - 0.1, 0, 1);
+}
+
+function updateBallTracksWarp(detectionsByColor, dt) {
+  const nextTracks = {};
+
+  for (const colorKey of Object.keys(BALL_PROFILES)) {
+    const detection = detectionsByColor[colorKey] && detectionsByColor[colorKey][0];
+    const previousTrack = state.ballTracks[colorKey];
+    let track = previousTrack ? { ...previousTrack } : null;
+
+    if (detection) {
+      if (!track) {
+        track = createTrackFromDetection(detection);
+      } else {
+        const predictedX = track.x + (track.vx * dt);
+        const predictedY = track.y + (track.vy * dt);
+        const dist = Math.hypot(detection.x - predictedX, detection.y - predictedY);
+        const maxJump = TRACKING_CONFIG.maxJumpPx + (track.r * 1.2);
+
+        if (dist <= maxJump || track.confidence < 0.4) {
+          updateTrackWithDetection(track, detection, dt);
+        } else {
+          predictTrack(track, dt);
+        }
+      }
+    } else if (track) {
+      predictTrack(track, dt);
+    }
+
+    if (track && track.misses <= TRACKING_CONFIG.maxMisses && track.confidence >= TRACKING_CONFIG.minTrackConfidence) {
+      nextTracks[colorKey] = track;
     }
   }
 
-  return smoothed;
+  state.ballTracks = nextTracks;
+}
+
+function projectTracksToFrame(inverseMatrix) {
+  const projected = {};
+  for (const colorKey of Object.keys(BALL_PROFILES)) {
+    const track = state.ballTracks[colorKey];
+    if (!track) {
+      projected[colorKey] = [];
+      continue;
+    }
+    projected[colorKey] = [mapCircleFromWarp(track, inverseMatrix)];
+  }
+  return projected;
+}
+
+function buildSeenFromTracks() {
+  const seen = {};
+  for (const colorKey of Object.keys(BALL_PROFILES)) {
+    const track = state.ballTracks[colorKey];
+    seen[colorKey] = Boolean(track && track.confidence >= 0.35 && track.misses <= 2);
+  }
+  return seen;
 }
 
 function refreshCalibrationState() {
@@ -1225,7 +1309,7 @@ function opencvDetectionLoop() {
   refs.tableState.textContent = tableQuad ? 'detectada' : 'nao detectada';
 
   const trackedBalls = {};
-  const seen = {};
+  let seen = {};
   let projectedPockets = [];
 
   if (tableQuad) {
@@ -1241,34 +1325,45 @@ function opencvDetectionLoop() {
 
     for (const key of Object.keys(BALL_PROFILES)) {
       const circlesWarped = detectColorCircles(warpedHsv, BALL_PROFILES[key]);
-      trackedBalls[key] = circlesWarped.map((circle) => mapCircleFromWarp(circle, perspective.inverse));
-      seen[key] = circlesWarped.length > 0;
+      trackedBalls[key] = circlesWarped;
     }
+
+    const nowMs = performance.now();
+    const dt = state.trackingTimestampMs ? Math.max((nowMs - state.trackingTimestampMs) / 1000, 1 / 120) : (1 / 30);
+    state.trackingTimestampMs = nowMs;
+    updateBallTracksWarp(trackedBalls, dt);
+    seen = buildSeenFromTracks();
+    const projectedTrackedBalls = projectTracksToFrame(perspective.inverse);
 
     warped.delete();
     warpedHsv.delete();
     perspective.forward.delete();
     perspective.inverse.delete();
+
+    state.pockets = projectedPockets;
+    state.trackedBalls = projectedTrackedBalls;
   } else {
+    state.ballTracks = {};
+    state.trackingTimestampMs = 0;
     for (const key of Object.keys(BALL_PROFILES)) {
       trackedBalls[key] = [];
       seen[key] = false;
     }
+    state.pockets = [];
+    state.trackedBalls = trackedBalls;
   }
 
   if (state.manualPockets && state.manualPockets.length === 6) {
     projectedPockets = state.manualPockets;
+    state.pockets = projectedPockets;
   }
 
-  const filteredTrackedBalls = smoothTrackedBalls(trackedBalls);
-  state.pockets = projectedPockets;
-  state.trackedBalls = filteredTrackedBalls;
-  const nearPocketCount = countBallsNearPockets(filteredTrackedBalls, projectedPockets);
+  const nearPocketCount = countBallsNearPockets(state.trackedBalls, projectedPockets);
   refs.pocketsState.textContent = `${projectedPockets.length}/6 | bolas perto: ${nearPocketCount}`;
 
   src.delete();
   hsv.delete();
-  refs.detectedBalls.textContent = summarizeTrackedBalls(filteredTrackedBalls);
+  refs.detectedBalls.textContent = summarizeTrackedBalls(state.trackedBalls);
   drawTrackingOverlay(width, height);
 
   for (const key of Object.keys(state.missingCounters)) {

@@ -13,7 +13,8 @@
     <main class="layout">
       <header class="hero reveal">
         <h1>GenSnooker</h1>
-        <p>Monitoramento por camera + regras da sinuca brasileira</p>
+        <p>Regras da sinuca brasileira com camera, OpenCV.js e persistencia</p>
+        <p id="secure-banner" class="warning hidden">Atencao: camera fora do localhost exige HTTPS.</p>
       </header>
 
       <section class="card reveal delay-1">
@@ -41,9 +42,11 @@
           </div>
 
           <div class="meta">
+            <p><strong>Match ID:</strong> <span id="match-id">-</span></p>
             <p><strong>Vez:</strong> <span id="turn-label">-</span></p>
             <p><strong>Bola da vez:</strong> <span id="ball-label">1</span></p>
             <p><strong>Status:</strong> <span id="status-label">Aguardando inicio</span></p>
+            <p><strong>API:</strong> <span id="api-state">offline</span></p>
           </div>
 
           <div class="actions">
@@ -79,10 +82,17 @@
             <p><strong>Threshold atual:</strong> <span id="threshold-value">6%</span></p>
             <p><strong>Nivel de movimento:</strong> <span id="motion-value">0.00%</span></p>
             <p><strong>Estado:</strong> <span id="motion-state">Parado</span></p>
-            <div class="meter">
-              <div id="meter-fill" class="meter-fill"></div>
-            </div>
-            <p class="tip">Dica: posicione a camera com a mesa inteira visivel e pouca vibracao.</p>
+            <div class="meter"><div id="meter-fill" class="meter-fill"></div></div>
+
+            <hr />
+
+            <p><strong>OpenCV:</strong> <span id="opencv-state">carregando...</span></p>
+            <label class="inline-control">
+              <input id="auto-referee" type="checkbox" checked />
+              Ativar arbitragem automatica
+            </label>
+            <p><strong>Bolas vistas:</strong> <span id="detected-balls">nenhuma</span></p>
+            <p class="tip">Use boa iluminacao e enquadre a mesa inteira para reduzir falso positivo.</p>
           </div>
         </div>
       </section>
@@ -93,18 +103,28 @@
           <li>Partida com 2 jogadores, alternando a vez por jogada ou falta.</li>
           <li>Bolas pontuadas por valor: 1 a 7 pontos, em ordem crescente de bola da vez.</li>
           <li>Encacapar a bola da vez soma pontos e mantem a vez do jogador.</li>
-          <li>Falta comum registrada aqui concede 4 pontos ao adversario e troca a vez.</li>
+          <li>Falta comum concede 4 pontos ao adversario e troca a vez.</li>
           <li>Vence quem atingir ou ultrapassar a meta de pontos configurada.</li>
         </ol>
-        <p class="note">Ajuste as regras para o formato local do seu jogo se houver variacoes regionais.</p>
       </section>
 
       <section class="card reveal delay-4">
         <h2>Log da partida</h2>
         <ul id="event-log" class="event-log"></ul>
       </section>
+
+      <section class="card reveal delay-4">
+        <h2>Partidas recentes</h2>
+        <ul id="recent-matches" class="event-log"></ul>
+      </section>
     </main>
 
+    <script>
+      window.onOpenCvReady = function onOpenCvReady() {
+        window.__opencvLoaded = true;
+      };
+    </script>
+    <script async src="https://docs.opencv.org/4.10.0/opencv.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

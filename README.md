@@ -1,40 +1,47 @@
 # GenSnooker
 
-App web para sinuca brasileira com:
-- placar da partida
-- regras base da modalidade
-- uso da camera para monitorar movimento na mesa
-- log de eventos de jogo
+Aplicacao full-stack para sinuca brasileira com:
+- placar e regras base
+- monitoramento por camera
+- automacao por OpenCV.js (pontuacao/falta por heuristica)
+- persistencia de partidas e log no Postgres
 
-## Como executar localmente
+## Variaveis de ambiente
 
-1. Abra `index.html` em um navegador moderno (Chrome, Edge ou Firefox).
-2. Clique em **Ligar camera** e permita acesso.
-3. Inicie a partida e use os controles para registrar jogadas.
+- `PORT=8080`
+- `DATABASE_URL=postgres://USUARIO:SENHA@HOST:PORTA/BANCO?sslmode=disable`
+- `FORCE_HTTPS=true` em producao com dominio
+- `PGSSL=true` apenas se seu Postgres exigir SSL no driver
 
-## Deploy no Easypanel
+Use no EasyPanel a URL interna do banco que voce enviou (service-to-service), no formato:
+`postgres://gensnooker:***@genfin_gensnooker-db:5432/gensnooker-db?sslmode=disable`
 
-Este repositorio ja esta preparado para deploy via Docker:
-- `Dockerfile`
-- `nginx.conf`
-- `.dockerignore`
+## Rodar local
 
-### Passo a passo
+1. Instale dependencias: `npm install`
+2. Configure `DATABASE_URL`
+3. Rode: `npm start`
+4. Abra: `http://localhost:8080`
 
-1. No Easypanel, crie um novo app do tipo **Source / Git**.
-2. Aponte para este repositorio.
-3. Build type: **Dockerfile** (raiz do projeto).
-4. Porta do container: **80**.
-5. Configure dominio e ative SSL (HTTPS).
-6. Publique o app.
+## Deploy no EasyPanel
 
-### Validacao
+1. Crie app `Source/Git` apontando para este repositorio.
+2. Build com `Dockerfile` da raiz.
+3. Defina variaveis:
+- `DATABASE_URL` com seu Postgres
+- `FORCE_HTTPS=true`
+4. Exponha a porta `8080`.
+5. Adicione dominio final e ative SSL/Let's Encrypt.
+6. Em regras do dominio, force redirect HTTP -> HTTPS.
 
-- URL principal deve abrir a interface do GenSnooker.
-- Healthcheck opcional: `https://SEU_DOMINIO/health` deve retornar `ok`.
+## Validacao producao
 
-## Observacoes importantes
+- `GET /health` deve retornar `{ "ok": true, "db": true }`
+- Abra o dominio HTTPS e permita camera.
+- Inicie partida e confirme gravacao de eventos/placar no banco.
 
-- O monitoramento por camera usa deteccao de movimento por diferenca entre frames.
-- Para camera funcionar fora de localhost, o navegador exige **HTTPS**.
-- As regras podem variar por regiao. A tela mostra um conjunto base e o placar pode ser ajustado manualmente.
+## Observacoes sobre automacao OpenCV
+
+- A deteccao usa faixa HSV + HoughCircles (heuristica).
+- Iluminacao, reflexo e cor do pano afetam acuracia.
+- Recomendado usar como arbitragem assistida e ajustar thresholds em campo.

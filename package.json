@@ -1,0 +1,17 @@
+{
+  "name": "gensnooker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sinuca brasileira com camera, OpenCV e persistencia em Postgres",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.13.3"
+  }
+}

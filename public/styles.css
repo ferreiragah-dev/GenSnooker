@@ -76,6 +76,10 @@ body {
   color: var(--ink-200);
 }
 
+.warning {
+  color: #ffd7a7;
+}
+
 .card {
   background: linear-gradient(150deg, rgba(13, 63, 44, 0.86), rgba(7, 32, 22, 0.94));
   border: 1px solid rgba(214, 213, 207, 0.2);
@@ -130,10 +134,6 @@ button:hover {
   filter: brightness(1.05);
 }
 
-button:active {
-  transform: translateY(0);
-}
-
 button.ghost {
   background: rgba(248, 246, 239, 0.12);
   color: var(--ink-100);
@@ -183,7 +183,7 @@ button.warn {
 .meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 18px;
+  gap: 8px 16px;
 }
 
 .meta p {
@@ -237,6 +237,19 @@ video {
   gap: 8px;
 }
 
+.inline-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+hr {
+  width: 100%;
+  border: none;
+  border-top: 1px solid rgba(248, 246, 239, 0.2);
+  margin: 8px 0;
+}
+
 .meter {
   width: 100%;
   height: 12px;
@@ -259,7 +272,6 @@ video {
   gap: 6px;
 }
 
-.note,
 .tip {
   color: var(--ink-200);
   margin-bottom: 0;

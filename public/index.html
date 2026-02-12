@@ -66,7 +66,10 @@
         <h2>Monitoramento da mesa</h2>
         <div class="camera-grid">
           <div class="camera-panel">
-            <video id="video" playsinline autoplay muted></video>
+            <div class="video-stack">
+              <video id="video" playsinline autoplay muted></video>
+              <canvas id="overlay-canvas"></canvas>
+            </div>
             <canvas id="processing-canvas" class="hidden"></canvas>
             <div class="camera-controls">
               <button id="btn-camera" type="button">Ligar camera</button>
@@ -91,6 +94,8 @@
               <input id="auto-referee" type="checkbox" checked />
               Ativar arbitragem automatica
             </label>
+            <p><strong>Mesa:</strong> <span id="table-state">nao detectada</span></p>
+            <p><strong>Cacapas:</strong> <span id="pockets-state">0/6</span></p>
             <p><strong>Bolas vistas:</strong> <span id="detected-balls">nenhuma</span></p>
             <p class="tip">Use boa iluminacao e enquadre a mesa inteira para reduzir falso positivo.</p>
           </div>

@@ -19,6 +19,9 @@ const state = {
   cvReady: false,
   autoReferee: true,
   frameCounter: 0,
+  tableRect: null,
+  pockets: [],
+  trackedBalls: {},
   missingCounters: {
     white: 0,
     1: 0,
@@ -42,6 +45,7 @@ const refs = {
   eventLog: document.querySelector('#event-log'),
   recentMatches: document.querySelector('#recent-matches'),
   video: document.querySelector('#video'),
+  overlayCanvas: document.querySelector('#overlay-canvas'),
   canvas: document.querySelector('#processing-canvas'),
   btnCamera: document.querySelector('#btn-camera'),
   btnStopCamera: document.querySelector('#btn-stop-camera'),
@@ -61,11 +65,14 @@ const refs = {
   matchId: document.querySelector('#match-id'),
   secureBanner: document.querySelector('#secure-banner'),
   opencvState: document.querySelector('#opencv-state'),
+  tableState: document.querySelector('#table-state'),
+  pocketsState: document.querySelector('#pockets-state'),
   detectedBalls: document.querySelector('#detected-balls'),
   autoReferee: document.querySelector('#auto-referee'),
 };
 
 const ctx = refs.canvas.getContext('2d', { willReadFrequently: true });
+const overlayCtx = refs.overlayCanvas.getContext('2d');
 
 const BALL_PROFILES = {
   white: [[0, 0, 190], [180, 40, 255]],
@@ -79,6 +86,17 @@ const BALL_PROFILES = {
   5: [[9, 100, 80], [18, 255, 255]],
   6: [[40, 70, 50], [85, 255, 255]],
   7: [[0, 0, 0], [180, 255, 55]],
+};
+
+const BALL_DRAW_COLORS = {
+  white: '#f5f5f5',
+  1: '#f2b84b',
+  2: '#4b8cf2',
+  3: '#da574f',
+  4: '#8f6bd9',
+  5: '#d9783b',
+  6: '#4bb96f',
+  7: '#1f1f1f',
 };
 
 function timestamp() {
@@ -388,9 +406,18 @@ function stopCamera() {
   refs.video.srcObject = null;
   state.prevGray = null;
   state.moving = false;
+  state.tableRect = null;
+  state.pockets = [];
+  state.trackedBalls = {};
   refs.motionState.textContent = 'Parado';
   refs.motionValue.textContent = '0.00%';
   refs.meterFill.style.width = '0%';
+  refs.tableState.textContent = 'nao detectada';
+  refs.pocketsState.textContent = '0/6';
+  refs.detectedBalls.textContent = 'nenhuma';
+  if (overlayCtx) {
+    overlayCtx.clearRect(0, 0, refs.overlayCanvas.width, refs.overlayCanvas.height);
+  }
   logEvent('Camera desligada.', { eventType: 'camera_off' });
 }
 
@@ -415,50 +442,211 @@ function toGrayScale(rgba) {
   return gray;
 }
 
-function detectColorPresence(hsv, profile) {
+function buildMaskFromProfile(hsv, profile) {
   const cv = window.cv;
   const lower = new cv.Mat(hsv.rows, hsv.cols, hsv.type());
   const upper = new cv.Mat(hsv.rows, hsv.cols, hsv.type());
-  let mask;
+  let mask = null;
+
+  if (Array.isArray(profile[0][0])) {
+    for (const [l, u] of profile) {
+      const localMask = new cv.Mat();
+      lower.setTo(new cv.Scalar(l[0], l[1], l[2], 0));
+      upper.setTo(new cv.Scalar(u[0], u[1], u[2], 255));
+      cv.inRange(hsv, lower, upper, localMask);
+      if (!mask) {
+        mask = localMask;
+      } else {
+        cv.bitwise_or(mask, localMask, mask);
+        localMask.delete();
+      }
+    }
+  } else {
+    mask = new cv.Mat();
+    lower.setTo(new cv.Scalar(profile[0][0], profile[0][1], profile[0][2], 0));
+    upper.setTo(new cv.Scalar(profile[1][0], profile[1][1], profile[1][2], 255));
+    cv.inRange(hsv, lower, upper, mask);
+  }
+
+  lower.delete();
+  upper.delete();
+  return mask;
+}
+
+function detectColorCircles(hsv, profile) {
+  const cv = window.cv;
+  const mask = buildMaskFromProfile(hsv, profile);
+  const circles = new cv.Mat();
 
   try {
-    if (Array.isArray(profile[0][0])) {
-      let merged = null;
-      for (const [l, u] of profile) {
-        const localMask = new cv.Mat();
-        lower.setTo(new cv.Scalar(l[0], l[1], l[2], 0));
-        upper.setTo(new cv.Scalar(u[0], u[1], u[2], 255));
-        cv.inRange(hsv, lower, upper, localMask);
-        if (!merged) {
-          merged = localMask;
-        } else {
-          cv.bitwise_or(merged, localMask, merged);
-          localMask.delete();
-        }
-      }
-      mask = merged;
-    } else {
-      mask = new cv.Mat();
-      lower.setTo(new cv.Scalar(profile[0][0], profile[0][1], profile[0][2], 0));
-      upper.setTo(new cv.Scalar(profile[1][0], profile[1][1], profile[1][2], 255));
-      cv.inRange(hsv, lower, upper, mask);
-    }
+    cv.GaussianBlur(mask, mask, new cv.Size(7, 7), 0, 0, cv.BORDER_DEFAULT);
+    cv.HoughCircles(mask, circles, cv.HOUGH_GRADIENT, 1.2, 16, 75, 14, 4, 20);
 
-    const circles = new cv.Mat();
-    cv.HoughCircles(mask, circles, cv.HOUGH_GRADIENT, 1.2, 18, 80, 14, 4, 18);
-    const found = circles.cols > 0;
-    circles.delete();
-    mask.delete();
-    lower.delete();
-    upper.delete();
-    return found;
-  } catch (_error) {
-    if (mask) {
-      mask.delete();
+    const found = [];
+    for (let i = 0; i < circles.cols; i += 1) {
+      const base = i * 4;
+      found.push({
+        x: circles.data32F[base],
+        y: circles.data32F[base + 1],
+        r: circles.data32F[base + 2],
+      });
     }
-    lower.delete();
-    upper.delete();
-    return false;
+    mask.delete();
+    circles.delete();
+    return found.sort((a, b) => b.r - a.r);
+  } catch (_error) {
+    mask.delete();
+    circles.delete();
+    return [];
+  }
+}
+
+function detectTableRect(hsv) {
+  const cv = window.cv;
+  const mask = new cv.Mat();
+  const lower = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), new cv.Scalar(35, 40, 30, 0));
+  const upper = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), new cv.Scalar(95, 255, 255, 255));
+  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(9, 9));
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+
+  cv.inRange(hsv, lower, upper, mask);
+  cv.morphologyEx(mask, mask, cv.MORPH_OPEN, kernel);
+  cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
+  cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+  let bestRect = null;
+  let bestArea = 0;
+  const minArea = (hsv.cols * hsv.rows) * 0.18;
+
+  for (let i = 0; i < contours.size(); i += 1) {
+    const contour = contours.get(i);
+    const rect = cv.boundingRect(contour);
+    const area = rect.width * rect.height;
+    contour.delete();
+
+    if (area > bestArea && area > minArea) {
+      bestArea = area;
+      bestRect = rect;
+    }
+  }
+
+  lower.delete();
+  upper.delete();
+  kernel.delete();
+  contours.delete();
+  hierarchy.delete();
+  mask.delete();
+
+  return bestRect;
+}
+
+function buildPocketsFromTable(tableRect) {
+  if (!tableRect) {
+    return [];
+  }
+
+  const r = Math.max(8, Math.round(Math.min(tableRect.width, tableRect.height) * 0.055));
+  const left = tableRect.x;
+  const right = tableRect.x + tableRect.width;
+  const top = tableRect.y;
+  const bottom = tableRect.y + tableRect.height;
+  const mid = tableRect.x + (tableRect.width / 2);
+
+  return [
+    { name: 'sup-esq', x: left, y: top, r },
+    { name: 'sup-centro', x: mid, y: top, r },
+    { name: 'sup-dir', x: right, y: top, r },
+    { name: 'inf-esq', x: left, y: bottom, r },
+    { name: 'inf-centro', x: mid, y: bottom, r },
+    { name: 'inf-dir', x: right, y: bottom, r },
+  ];
+}
+
+function summarizeTrackedBalls(trackedBalls) {
+  const keys = Object.keys(trackedBalls).filter((k) => trackedBalls[k] && trackedBalls[k].length);
+  if (!keys.length) {
+    return 'nenhuma';
+  }
+
+  return keys
+    .filter((k) => k !== 'white')
+    .sort((a, b) => Number(a) - Number(b))
+    .map((k) => `${k}(${trackedBalls[k].length})`)
+    .join(', ') || 'nenhuma';
+}
+
+function countBallsNearPockets(trackedBalls, pockets) {
+  if (!pockets.length) {
+    return 0;
+  }
+
+  let count = 0;
+  for (const entries of Object.values(trackedBalls)) {
+    for (const ball of entries) {
+      const near = pockets.some((pocket) => {
+        const dx = ball.x - pocket.x;
+        const dy = ball.y - pocket.y;
+        return Math.hypot(dx, dy) <= (pocket.r * 1.35);
+      });
+      if (near) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
+function toOverlayPoint(framePoint, frameWidth, frameHeight) {
+  const scaleX = refs.overlayCanvas.width / frameWidth;
+  const scaleY = refs.overlayCanvas.height / frameHeight;
+  return {
+    x: framePoint.x * scaleX,
+    y: framePoint.y * scaleY,
+  };
+}
+
+function drawTrackingOverlay(frameWidth, frameHeight) {
+  if (!overlayCtx) {
+    return;
+  }
+
+  const width = refs.overlayCanvas.width;
+  const height = refs.overlayCanvas.height;
+  overlayCtx.clearRect(0, 0, width, height);
+
+  if (state.tableRect) {
+    const p = toOverlayPoint({ x: state.tableRect.x, y: state.tableRect.y }, frameWidth, frameHeight);
+    const w = (state.tableRect.width / frameWidth) * width;
+    const h = (state.tableRect.height / frameHeight) * height;
+    overlayCtx.strokeStyle = 'rgba(96, 245, 180, 0.95)';
+    overlayCtx.lineWidth = 2;
+    overlayCtx.strokeRect(p.x, p.y, w, h);
+  }
+
+  for (const pocket of state.pockets) {
+    const p = toOverlayPoint(pocket, frameWidth, frameHeight);
+    const r = (pocket.r / frameWidth) * width;
+    overlayCtx.beginPath();
+    overlayCtx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    overlayCtx.strokeStyle = 'rgba(255, 214, 120, 0.95)';
+    overlayCtx.lineWidth = 2;
+    overlayCtx.stroke();
+  }
+
+  for (const [ballKey, entries] of Object.entries(state.trackedBalls)) {
+    for (const ball of entries) {
+      const p = toOverlayPoint(ball, frameWidth, frameHeight);
+      const r = (ball.r / frameWidth) * width;
+      overlayCtx.beginPath();
+      overlayCtx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      overlayCtx.strokeStyle = BALL_DRAW_COLORS[ballKey] || '#ffffff';
+      overlayCtx.lineWidth = 2;
+      overlayCtx.stroke();
+      overlayCtx.font = '12px Space Grotesk';
+      overlayCtx.fillStyle = '#f8f6ef';
+      overlayCtx.fillText(ballKey, p.x + r + 3, p.y - r - 3);
+    }
   }
 }
 
@@ -473,10 +661,16 @@ function opencvDetectionLoop() {
   }
 
   const cv = window.cv;
-  const width = 420;
-  const height = 236;
+  const width = 480;
+  const height = 270;
   refs.canvas.width = width;
   refs.canvas.height = height;
+  const overlayWidth = refs.video.videoWidth || 640;
+  const overlayHeight = refs.video.videoHeight || 360;
+  if (refs.overlayCanvas.width !== overlayWidth || refs.overlayCanvas.height !== overlayHeight) {
+    refs.overlayCanvas.width = overlayWidth;
+    refs.overlayCanvas.height = overlayHeight;
+  }
   ctx.drawImage(refs.video, 0, 0, width, height);
 
   const src = cv.imread(refs.canvas);
@@ -484,20 +678,25 @@ function opencvDetectionLoop() {
   cv.cvtColor(src, hsv, cv.COLOR_RGBA2RGB);
   cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
 
+  state.tableRect = detectTableRect(hsv);
+  state.pockets = buildPocketsFromTable(state.tableRect);
+  refs.tableState.textContent = state.tableRect ? 'detectada' : 'nao detectada';
+
+  const trackedBalls = {};
   const seen = {};
   for (const key of Object.keys(BALL_PROFILES)) {
-    seen[key] = detectColorPresence(hsv, BALL_PROFILES[key]);
+    const circles = detectColorCircles(hsv, BALL_PROFILES[key]);
+    trackedBalls[key] = circles.slice(0, 3);
+    seen[key] = circles.length > 0;
   }
+  state.trackedBalls = trackedBalls;
+  const nearPocketCount = countBallsNearPockets(trackedBalls, state.pockets);
+  refs.pocketsState.textContent = `${state.pockets.length}/6 | bolas perto: ${nearPocketCount}`;
 
   src.delete();
   hsv.delete();
-
-  const visibleBalls = Object.keys(seen)
-    .filter((k) => k !== 'white' && seen[k])
-    .map((k) => Number(k))
-    .sort((a, b) => a - b);
-
-  refs.detectedBalls.textContent = visibleBalls.length ? visibleBalls.join(', ') : 'nenhuma';
+  refs.detectedBalls.textContent = summarizeTrackedBalls(trackedBalls);
+  drawTrackingOverlay(width, height);
 
   for (const key of Object.keys(state.missingCounters)) {
     if (seen[key]) {

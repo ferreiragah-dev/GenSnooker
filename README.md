@@ -1,4 +1,4 @@
-﻿# GenSnooker
+# GenSnooker
 
 App web para sinuca brasileira com:
 - placar da partida

@@ -1,4 +1,4 @@
-﻿const state = {
+const state = {
   players: ['Jogador 1', 'Jogador 2'],
   scores: [0, 0],
   currentPlayer: 0,

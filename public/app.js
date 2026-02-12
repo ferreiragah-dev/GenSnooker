@@ -99,6 +99,12 @@ const BALL_DRAW_COLORS = {
   7: '#1f1f1f',
 };
 
+const OPENCV_SOURCES = [
+  'https://docs.opencv.org/4.10.0/opencv.js',
+  'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/opencv.js',
+  'https://unpkg.com/@techstark/opencv-js@4.10.0-release.1/opencv.js',
+];
+
 function timestamp() {
   return new Date().toLocaleTimeString('pt-BR', {
     hour: '2-digit',
@@ -816,27 +822,73 @@ function updateOpencvStateUi() {
   refs.opencvState.textContent = 'carregando...';
 }
 
-function waitForOpenCv() {
-  const maxWaitMs = 15000;
-  const start = performance.now();
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error(`falha_script:${src}`));
+    document.head.appendChild(script);
+  });
+}
 
-  const tick = () => {
-    if (window.__opencvLoaded && window.cv && typeof window.cv.Mat === 'function') {
+function waitForCvRuntime(timeoutMs = 12000) {
+  return new Promise((resolve, reject) => {
+    const startedAt = performance.now();
+
+    const checkReady = () => {
+      if (window.cv && typeof window.cv.Mat === 'function') {
+        resolve();
+        return;
+      }
+
+      if (performance.now() - startedAt > timeoutMs) {
+        reject(new Error('timeout_runtime_opencv'));
+        return;
+      }
+
+      setTimeout(checkReady, 120);
+    };
+
+    if (window.cv && typeof window.cv.Mat === 'function') {
+      resolve();
+      return;
+    }
+
+    if (window.cv && typeof window.cv === 'object') {
+      window.cv.onRuntimeInitialized = () => resolve();
+    }
+
+    checkReady();
+  });
+}
+
+async function initOpenCv() {
+  updateOpencvStateUi();
+
+  if (window.cv && typeof window.cv.Mat === 'function') {
+    state.cvReady = true;
+    updateOpencvStateUi();
+    return;
+  }
+
+  for (const src of OPENCV_SOURCES) {
+    try {
+      await loadScript(src);
+      await waitForCvRuntime();
       state.cvReady = true;
-      updateOpencvStateUi();
+      refs.opencvState.textContent = 'pronto';
+      logEvent(`OpenCV carregado via ${new URL(src).hostname}.`, { eventType: 'opencv_ready' });
       return;
+    } catch (_error) {
+      refs.opencvState.textContent = 'carregando (fallback)...';
     }
+  }
 
-    if (performance.now() - start > maxWaitMs) {
-      state.cvReady = false;
-      refs.opencvState.textContent = 'indisponivel';
-      return;
-    }
-
-    setTimeout(tick, 250);
-  };
-
-  tick();
+  state.cvReady = false;
+  refs.opencvState.textContent = 'indisponivel';
+  logEvent('OpenCV indisponivel: falha ao carregar bibliotecas de visao.', { persist: false });
 }
 
 function checkSecureContext() {
@@ -872,7 +924,7 @@ function init() {
   renderScoreboard();
   onThresholdChange();
   checkSecureContext();
-  waitForOpenCv();
+  initOpenCv();
   loadRecentMatches();
   logEvent('App pronto. Inicie a partida, ligue a camera e valide a automacao.', { persist: false });
 }

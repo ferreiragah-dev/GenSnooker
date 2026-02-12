@@ -19,7 +19,7 @@ const state = {
   cvReady: false,
   autoReferee: true,
   frameCounter: 0,
-  tableRect: null,
+  tableQuad: null,
   pockets: [],
   trackedBalls: {},
   missingCounters: {
@@ -104,6 +104,9 @@ const OPENCV_SOURCES = [
   'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/opencv.js',
   'https://unpkg.com/@techstark/opencv-js@4.10.0-release.1/opencv.js',
 ];
+
+const WARP_WIDTH = 960;
+const WARP_HEIGHT = 480;
 
 function timestamp() {
   return new Date().toLocaleTimeString('pt-BR', {
@@ -412,7 +415,7 @@ function stopCamera() {
   refs.video.srcObject = null;
   state.prevGray = null;
   state.moving = false;
-  state.tableRect = null;
+  state.tableQuad = null;
   state.pockets = [];
   state.trackedBalls = {};
   refs.motionState.textContent = 'Parado';
@@ -507,33 +510,80 @@ function detectColorCircles(hsv, profile) {
   }
 }
 
-function detectTableRect(hsv) {
+function computePolygonArea(points) {
+  let area = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    const current = points[i];
+    const next = points[(i + 1) % points.length];
+    area += (current.x * next.y) - (next.x * current.y);
+  }
+  return Math.abs(area / 2);
+}
+
+function orderQuadCorners(points) {
+  const bySum = [...points].sort((a, b) => (a.x + a.y) - (b.x + b.y));
+  const byDiff = [...points].sort((a, b) => (a.x - a.y) - (b.x - b.y));
+
+  const topLeft = bySum[0];
+  const bottomRight = bySum[bySum.length - 1];
+  const bottomLeft = byDiff[0];
+  const topRight = byDiff[byDiff.length - 1];
+
+  return [topLeft, topRight, bottomRight, bottomLeft];
+}
+
+function extractQuadFromContour(contour) {
+  const points = [];
+  const raw = contour.data32S;
+  for (let i = 0; i < raw.length; i += 2) {
+    points.push({ x: raw[i], y: raw[i + 1] });
+  }
+
+  if (points.length < 4) {
+    return null;
+  }
+
+  const quad = orderQuadCorners(points);
+  const unique = new Set(quad.map((p) => `${p.x}:${p.y}`));
+  if (unique.size < 4) {
+    return null;
+  }
+
+  return quad;
+}
+
+function detectTableQuad(hsv) {
   const cv = window.cv;
   const mask = new cv.Mat();
   const lower = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), new cv.Scalar(35, 40, 30, 0));
   const upper = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), new cv.Scalar(95, 255, 255, 255));
-  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(9, 9));
+  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(11, 11));
   const contours = new cv.MatVector();
   const hierarchy = new cv.Mat();
 
   cv.inRange(hsv, lower, upper, mask);
-  cv.morphologyEx(mask, mask, cv.MORPH_OPEN, kernel);
   cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
+  cv.morphologyEx(mask, mask, cv.MORPH_OPEN, kernel);
   cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-  let bestRect = null;
+  let bestQuad = null;
   let bestArea = 0;
-  const minArea = (hsv.cols * hsv.rows) * 0.18;
+  const minArea = (hsv.cols * hsv.rows) * 0.12;
 
   for (let i = 0; i < contours.size(); i += 1) {
     const contour = contours.get(i);
-    const rect = cv.boundingRect(contour);
-    const area = rect.width * rect.height;
+    const area = cv.contourArea(contour);
+    const quad = extractQuadFromContour(contour);
     contour.delete();
 
-    if (area > bestArea && area > minArea) {
+    if (!quad) {
+      continue;
+    }
+
+    const quadArea = computePolygonArea(quad);
+    if (area > bestArea && area > minArea && quadArea > minArea) {
       bestArea = area;
-      bestRect = rect;
+      bestQuad = quad;
     }
   }
 
@@ -544,20 +594,17 @@ function detectTableRect(hsv) {
   hierarchy.delete();
   mask.delete();
 
-  return bestRect;
+  return bestQuad;
 }
 
-function buildPocketsFromTable(tableRect) {
-  if (!tableRect) {
-    return [];
-  }
-
-  const r = Math.max(8, Math.round(Math.min(tableRect.width, tableRect.height) * 0.055));
-  const left = tableRect.x;
-  const right = tableRect.x + tableRect.width;
-  const top = tableRect.y;
-  const bottom = tableRect.y + tableRect.height;
-  const mid = tableRect.x + (tableRect.width / 2);
+function buildWarpedPockets(width, height) {
+  const r = Math.max(10, Math.round(Math.min(width, height) * 0.052));
+  const inset = Math.round(r * 0.3);
+  const left = inset;
+  const right = width - inset;
+  const top = inset;
+  const bottom = height - inset;
+  const mid = width / 2;
 
   return [
     { name: 'sup-esq', x: left, y: top, r },
@@ -567,6 +614,50 @@ function buildPocketsFromTable(tableRect) {
     { name: 'inf-centro', x: mid, y: bottom, r },
     { name: 'inf-dir', x: right, y: bottom, r },
   ];
+}
+
+function computePerspectiveMatrices(tableQuad) {
+  const cv = window.cv;
+  const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    tableQuad[0].x, tableQuad[0].y,
+    tableQuad[1].x, tableQuad[1].y,
+    tableQuad[2].x, tableQuad[2].y,
+    tableQuad[3].x, tableQuad[3].y,
+  ]);
+  const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    0, 0,
+    WARP_WIDTH, 0,
+    WARP_WIDTH, WARP_HEIGHT,
+    0, WARP_HEIGHT,
+  ]);
+
+  const forward = cv.getPerspectiveTransform(srcPts, dstPts);
+  const inverse = cv.getPerspectiveTransform(dstPts, srcPts);
+  srcPts.delete();
+  dstPts.delete();
+  return { forward, inverse };
+}
+
+function projectPoint(matrix, x, y) {
+  const m = matrix.data64F && matrix.data64F.length ? matrix.data64F : matrix.data32F;
+  const den = (m[6] * x) + (m[7] * y) + m[8];
+  if (!den || Number.isNaN(den)) {
+    return { x: 0, y: 0 };
+  }
+  return {
+    x: ((m[0] * x) + (m[1] * y) + m[2]) / den,
+    y: ((m[3] * x) + (m[4] * y) + m[5]) / den,
+  };
+}
+
+function mapCircleFromWarp(circle, inverseMatrix) {
+  const center = projectPoint(inverseMatrix, circle.x, circle.y);
+  const edge = projectPoint(inverseMatrix, circle.x + circle.r, circle.y);
+  return {
+    x: center.x,
+    y: center.y,
+    r: Math.max(2, Math.hypot(edge.x - center.x, edge.y - center.y)),
+  };
 }
 
 function summarizeTrackedBalls(trackedBalls) {
@@ -621,13 +712,20 @@ function drawTrackingOverlay(frameWidth, frameHeight) {
   const height = refs.overlayCanvas.height;
   overlayCtx.clearRect(0, 0, width, height);
 
-  if (state.tableRect) {
-    const p = toOverlayPoint({ x: state.tableRect.x, y: state.tableRect.y }, frameWidth, frameHeight);
-    const w = (state.tableRect.width / frameWidth) * width;
-    const h = (state.tableRect.height / frameHeight) * height;
+  if (state.tableQuad && state.tableQuad.length === 4) {
     overlayCtx.strokeStyle = 'rgba(96, 245, 180, 0.95)';
     overlayCtx.lineWidth = 2;
-    overlayCtx.strokeRect(p.x, p.y, w, h);
+    overlayCtx.beginPath();
+    state.tableQuad.forEach((corner, idx) => {
+      const p = toOverlayPoint(corner, frameWidth, frameHeight);
+      if (idx === 0) {
+        overlayCtx.moveTo(p.x, p.y);
+      } else {
+        overlayCtx.lineTo(p.x, p.y);
+      }
+    });
+    overlayCtx.closePath();
+    overlayCtx.stroke();
   }
 
   for (const pocket of state.pockets) {
@@ -667,8 +765,8 @@ function opencvDetectionLoop() {
   }
 
   const cv = window.cv;
-  const width = 480;
-  const height = 270;
+  const width = 640;
+  const height = 360;
   refs.canvas.width = width;
   refs.canvas.height = height;
   const overlayWidth = refs.video.videoWidth || 640;
@@ -684,20 +782,46 @@ function opencvDetectionLoop() {
   cv.cvtColor(src, hsv, cv.COLOR_RGBA2RGB);
   cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
 
-  state.tableRect = detectTableRect(hsv);
-  state.pockets = buildPocketsFromTable(state.tableRect);
-  refs.tableState.textContent = state.tableRect ? 'detectada' : 'nao detectada';
+  const tableQuad = detectTableQuad(hsv);
+  state.tableQuad = tableQuad;
+  refs.tableState.textContent = tableQuad ? 'detectada' : 'nao detectada';
 
   const trackedBalls = {};
   const seen = {};
-  for (const key of Object.keys(BALL_PROFILES)) {
-    const circles = detectColorCircles(hsv, BALL_PROFILES[key]);
-    trackedBalls[key] = circles.slice(0, 3);
-    seen[key] = circles.length > 0;
+  let projectedPockets = [];
+
+  if (tableQuad) {
+    const perspective = computePerspectiveMatrices(tableQuad);
+    const warped = new cv.Mat();
+    const warpedHsv = new cv.Mat();
+    cv.warpPerspective(src, warped, perspective.forward, new cv.Size(WARP_WIDTH, WARP_HEIGHT), cv.INTER_LINEAR, cv.BORDER_REPLICATE, new cv.Scalar());
+    cv.cvtColor(warped, warpedHsv, cv.COLOR_RGBA2RGB);
+    cv.cvtColor(warpedHsv, warpedHsv, cv.COLOR_RGB2HSV);
+
+    const warpedPockets = buildWarpedPockets(WARP_WIDTH, WARP_HEIGHT);
+    projectedPockets = warpedPockets.map((pocket) => mapCircleFromWarp(pocket, perspective.inverse));
+
+    for (const key of Object.keys(BALL_PROFILES)) {
+      const circlesWarped = detectColorCircles(warpedHsv, BALL_PROFILES[key]);
+      trackedBalls[key] = circlesWarped.slice(0, 3).map((circle) => mapCircleFromWarp(circle, perspective.inverse));
+      seen[key] = circlesWarped.length > 0;
+    }
+
+    warped.delete();
+    warpedHsv.delete();
+    perspective.forward.delete();
+    perspective.inverse.delete();
+  } else {
+    for (const key of Object.keys(BALL_PROFILES)) {
+      trackedBalls[key] = [];
+      seen[key] = false;
+    }
   }
+
+  state.pockets = projectedPockets;
   state.trackedBalls = trackedBalls;
-  const nearPocketCount = countBallsNearPockets(trackedBalls, state.pockets);
-  refs.pocketsState.textContent = `${state.pockets.length}/6 | bolas perto: ${nearPocketCount}`;
+  const nearPocketCount = countBallsNearPockets(trackedBalls, projectedPockets);
+  refs.pocketsState.textContent = `${projectedPockets.length}/6 | bolas perto: ${nearPocketCount}`;
 
   src.delete();
   hsv.delete();

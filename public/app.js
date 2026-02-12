@@ -21,6 +21,9 @@ const state = {
   calibrationMode: false,
   calibrationPoints: [],
   manualTableQuad: null,
+  pocketCalibrationMode: false,
+  pocketCalibrationPoints: [],
+  manualPockets: null,
   frameCounter: 0,
   tableQuad: null,
   pockets: [],
@@ -54,6 +57,8 @@ const refs = {
   btnStopCamera: document.querySelector('#btn-stop-camera'),
   btnCalibrateTable: document.querySelector('#btn-calibrate-table'),
   btnClearCalibration: document.querySelector('#btn-clear-calibration'),
+  btnCalibratePockets: document.querySelector('#btn-calibrate-pockets'),
+  btnClearPockets: document.querySelector('#btn-clear-pockets'),
   btnPot: document.querySelector('#btn-pot'),
   btnTurn: document.querySelector('#btn-turn'),
   btnFoul: document.querySelector('#btn-foul'),
@@ -71,6 +76,7 @@ const refs = {
   secureBanner: document.querySelector('#secure-banner'),
   opencvState: document.querySelector('#opencv-state'),
   calibrationState: document.querySelector('#calibration-state'),
+  pocketCalibrationState: document.querySelector('#pocket-calibration-state'),
   tableState: document.querySelector('#table-state'),
   pocketsState: document.querySelector('#pockets-state'),
   detectedBalls: document.querySelector('#detected-balls'),
@@ -431,8 +437,11 @@ function stopCamera() {
   state.moving = false;
   state.calibrationMode = false;
   state.calibrationPoints = [];
+  state.pocketCalibrationMode = false;
+  state.pocketCalibrationPoints = [];
   state.tableQuad = null;
   state.manualTableQuad = null;
+  state.manualPockets = null;
   state.pockets = [];
   state.trackedBalls = {};
   refs.motionState.textContent = 'Parado';
@@ -440,6 +449,7 @@ function stopCamera() {
   refs.meterFill.style.width = '0%';
   refs.tableState.textContent = 'nao detectada';
   refs.calibrationState.textContent = 'automatica';
+  refs.pocketCalibrationState.textContent = 'automatica';
   refs.pocketsState.textContent = '0/6';
   refs.detectedBalls.textContent = 'nenhuma';
   if (overlayCtx) {
@@ -757,10 +767,15 @@ function smoothTrackedBalls(nextTrackedBalls) {
 function refreshCalibrationState() {
   if (state.calibrationMode) {
     refs.calibrationState.textContent = `capturando cantos (${state.calibrationPoints.length}/4)`;
-    return;
+  } else {
+    refs.calibrationState.textContent = state.manualTableQuad ? 'manual' : 'automatica';
   }
 
-  refs.calibrationState.textContent = state.manualTableQuad ? 'manual' : 'automatica';
+  if (state.pocketCalibrationMode) {
+    refs.pocketCalibrationState.textContent = `capturando (${state.pocketCalibrationPoints.length}/6)`;
+  } else {
+    refs.pocketCalibrationState.textContent = state.manualPockets ? 'manual' : 'automatica';
+  }
 }
 
 function canvasClickToFramePoint(event, frameWidth, frameHeight) {
@@ -774,21 +789,38 @@ function canvasClickToFramePoint(event, frameWidth, frameHeight) {
 }
 
 function onOverlayClick(event) {
-  if (!state.calibrationMode || !state.stream) {
+  if ((!state.calibrationMode && !state.pocketCalibrationMode) || !state.stream) {
     return;
   }
 
   const frameWidth = 640;
   const frameHeight = 360;
   const point = canvasClickToFramePoint(event, frameWidth, frameHeight);
-  state.calibrationPoints.push(point);
+  if (state.calibrationMode) {
+    state.calibrationPoints.push(point);
 
-  if (state.calibrationPoints.length === 4) {
-    state.manualTableQuad = orderQuadCorners(state.calibrationPoints);
-    state.tableQuad = state.manualTableQuad;
-    state.calibrationMode = false;
-    state.calibrationPoints = [];
-    logEvent('Calibracao manual da mesa concluida.', { eventType: 'table_calibrated' });
+    if (state.calibrationPoints.length === 4) {
+      state.manualTableQuad = orderQuadCorners(state.calibrationPoints);
+      state.tableQuad = state.manualTableQuad;
+      state.calibrationMode = false;
+      state.calibrationPoints = [];
+      logEvent('Calibracao manual da mesa concluida.', { eventType: 'table_calibrated' });
+    }
+  } else if (state.pocketCalibrationMode) {
+    state.pocketCalibrationPoints.push(point);
+
+    if (state.pocketCalibrationPoints.length === 6) {
+      const baseRadius = Math.max(8, Math.round(Math.min(frameWidth, frameHeight) * 0.022));
+      state.manualPockets = state.pocketCalibrationPoints.map((pocketPoint, idx) => ({
+        name: `manual-${idx + 1}`,
+        x: pocketPoint.x,
+        y: pocketPoint.y,
+        r: baseRadius,
+      }));
+      state.pocketCalibrationMode = false;
+      state.pocketCalibrationPoints = [];
+      logEvent('Calibracao manual de cacapas concluida.', { eventType: 'pockets_calibrated' });
+    }
   }
 
   refreshCalibrationState();
@@ -803,9 +835,26 @@ function startManualCalibration() {
   state.calibrationMode = true;
   state.calibrationPoints = [];
   state.manualTableQuad = null;
+  state.pocketCalibrationMode = false;
   refreshCalibrationState();
   logEvent('Calibracao iniciada: clique nos 4 cantos internos da mesa (sup-esq, sup-dir, inf-dir, inf-esq).', {
     eventType: 'table_calibration_start',
+  });
+}
+
+function startPocketCalibration() {
+  if (!state.stream) {
+    logEvent('Ligue a camera antes de calibrar as cacapas.', { persist: false });
+    return;
+  }
+
+  state.pocketCalibrationMode = true;
+  state.pocketCalibrationPoints = [];
+  state.manualPockets = null;
+  state.calibrationMode = false;
+  refreshCalibrationState();
+  logEvent('Calibracao de cacapas iniciada: clique nas 6 cacapas visiveis.', {
+    eventType: 'pockets_calibration_start',
   });
 }
 
@@ -816,6 +865,16 @@ function clearManualCalibration() {
   refreshCalibrationState();
   logEvent('Calibracao manual removida. Voltando para deteccao automatica.', {
     eventType: 'table_calibration_cleared',
+  });
+}
+
+function clearPocketCalibration() {
+  state.pocketCalibrationMode = false;
+  state.pocketCalibrationPoints = [];
+  state.manualPockets = null;
+  refreshCalibrationState();
+  logEvent('Calibracao manual de cacapas removida.', {
+    eventType: 'pockets_calibration_cleared',
   });
 }
 
@@ -887,8 +946,9 @@ function drawTrackingOverlay(frameWidth, frameHeight) {
     overlayCtx.stroke();
   }
 
-  if (state.calibrationMode && state.calibrationPoints.length) {
-    for (const point of state.calibrationPoints) {
+  if ((state.calibrationMode && state.calibrationPoints.length) || (state.pocketCalibrationMode && state.pocketCalibrationPoints.length)) {
+    const drawPoints = state.calibrationMode ? state.calibrationPoints : state.pocketCalibrationPoints;
+    for (const point of drawPoints) {
       const p = toOverlayPoint(point, frameWidth, frameHeight);
       overlayCtx.beginPath();
       overlayCtx.arc(p.x, p.y, 6, 0, Math.PI * 2);
@@ -985,6 +1045,10 @@ function opencvDetectionLoop() {
       trackedBalls[key] = [];
       seen[key] = false;
     }
+  }
+
+  if (state.manualPockets && state.manualPockets.length === 6) {
+    projectedPockets = state.manualPockets;
   }
 
   const filteredTrackedBalls = smoothTrackedBalls(trackedBalls);
@@ -1200,6 +1264,8 @@ function bindEvents() {
   refs.btnStopCamera.addEventListener('click', stopCamera);
   refs.btnCalibrateTable.addEventListener('click', startManualCalibration);
   refs.btnClearCalibration.addEventListener('click', clearManualCalibration);
+  refs.btnCalibratePockets.addEventListener('click', startPocketCalibration);
+  refs.btnClearPockets.addEventListener('click', clearPocketCalibration);
   refs.overlayCanvas.addEventListener('click', onOverlayClick);
   refs.threshold.addEventListener('input', onThresholdChange);
   refs.autoReferee.addEventListener('change', (event) => {

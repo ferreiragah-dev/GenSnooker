@@ -1,47 +1,30 @@
-# GenSnooker
+# FaceCompare
 
-Aplicacao full-stack para sinuca brasileira com:
-- placar e regras base
-- monitoramento por camera
-- automacao por OpenCV.js (pontuacao/falta por heuristica)
-- persistencia de partidas e log no Postgres
+Software comparador de rostos executado no navegador.
 
-## Variaveis de ambiente
+## Recursos
 
-- `PORT=8080`
-- `DATABASE_URL=postgres://USUARIO:SENHA@HOST:PORTA/BANCO?sslmode=disable`
-- `FORCE_HTTPS=true` em producao com dominio
-- `PGSSL=true` apenas se seu Postgres exigir SSL no driver
-
-Use no EasyPanel a URL interna do banco que voce enviou (service-to-service), no formato:
-`postgres://gensnooker:***@genfin_gensnooker-db:5432/gensnooker-db?sslmode=disable`
+- Upload de duas imagens (Rosto A e Rosto B)
+- Deteccao facial por IA (TensorFlow.js + Face Mesh)
+- Comparacao por similaridade vetorial
+- Limiar ajustavel para decisao
+- Overlay com bounding box e pontos faciais
 
 ## Rodar local
 
-1. Instale dependencias: `npm install`
-2. Configure `DATABASE_URL`
-3. Rode: `npm start`
-4. Abra: `http://localhost:8080`
+1. `npm install`
+2. `npm start`
+3. Abra `http://localhost:8080`
 
-## Deploy no EasyPanel
+## Deploy EasyPanel
 
-1. Crie app `Source/Git` apontando para este repositorio.
-2. Build com `Dockerfile` da raiz.
-3. Defina variaveis:
-- `DATABASE_URL` com seu Postgres
-- `FORCE_HTTPS=true`
-4. Exponha a porta `8080`.
-5. Adicione dominio final e ative SSL/Let's Encrypt.
-6. Em regras do dominio, force redirect HTTP -> HTTPS.
+1. Build com o `Dockerfile` da raiz.
+2. Defina:
+- `PORT=8080`
+- `FORCE_HTTPS=true` (producao)
+3. Exponha porta `8080`.
+4. Teste `GET /health`.
 
-## Validacao producao
+## Aviso
 
-- `GET /health` deve retornar `{ "ok": true, "db": true }`
-- Abra o dominio HTTPS e permita camera.
-- Inicie partida e confirme gravacao de eventos/placar no banco.
-
-## Observacoes sobre automacao OpenCV
-
-- A deteccao usa faixa HSV + HoughCircles (heuristica).
-- Iluminacao, reflexo e cor do pano afetam acuracia.
-- Recomendado usar como arbitragem assistida e ajustar thresholds em campo.
+Comparacao facial e probabilistica e pode falhar com baixa luz, pose extrema ou oclusao. Nao use como fator unico em cenarios criticos de seguranca.

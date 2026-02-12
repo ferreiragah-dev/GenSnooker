@@ -3,145 +3,64 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>GenSnooker - Sinuca Brasileira</title>
+    <title>FaceCompare</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="bg-shape bg-shape-a"></div>
-    <div class="bg-shape bg-shape-b"></div>
-
-    <main class="layout">
-      <header class="hero reveal">
-        <h1>GenSnooker</h1>
-        <p>Regras da sinuca brasileira com camera, OpenCV.js e persistencia</p>
-        <p id="secure-banner" class="warning hidden">Atencao: camera fora do localhost exige HTTPS.</p>
+    <main class="wrap">
+      <header class="hero">
+        <h1>FaceCompare</h1>
+        <p>Comparador de rostos por IA no navegador</p>
       </header>
 
-      <section class="card reveal delay-1">
-        <h2>Partida</h2>
-        <form id="match-form" class="match-form">
-          <label>
-            Modalidade
-            <select id="game-type">
-              <option value="sinuca_brasileira" selected>Sinuca Brasileira</option>
-              <option value="bilhar">Bilhar</option>
-              <option value="eight_ball">8 Ball</option>
-            </select>
-          </label>
-          <label>
-            Jogador 1
-            <input id="player-a" type="text" value="Jogador 1" maxlength="24" />
-          </label>
-          <label>
-            Jogador 2
-            <input id="player-b" type="text" value="Jogador 2" maxlength="24" />
-          </label>
-          <label>
-            Pontos para vencer
-            <input id="target-points" type="number" value="30" min="1" max="999" />
-          </label>
-          <button type="submit">Iniciar partida</button>
-        </form>
+      <section class="panel">
+        <h2>Imagens</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>Rosto A</h3>
+            <input id="file-a" type="file" accept="image/*" />
+            <canvas id="canvas-a" width="480" height="320"></canvas>
+            <p id="status-a" class="status">Aguardando imagem...</p>
+          </article>
 
-        <div id="scoreboard" class="scoreboard hidden">
-          <div class="players">
-            <article id="p0" class="player"></article>
-            <article id="p1" class="player"></article>
-          </div>
-
-          <div class="meta">
-            <p><strong>Match ID:</strong> <span id="match-id">-</span></p>
-            <p><strong>Jogo:</strong> <span id="game-label">Sinuca Brasileira</span></p>
-            <p><strong>Vez:</strong> <span id="turn-label">-</span></p>
-            <p><strong>Bola da vez:</strong> <span id="ball-label">1</span></p>
-            <p><strong>Status:</strong> <span id="status-label">Aguardando inicio</span></p>
-            <p><strong>API:</strong> <span id="api-state">offline</span></p>
-          </div>
-
-          <div class="actions">
-            <button id="btn-pot" type="button">Encacapou bola da vez</button>
-            <button id="btn-turn" type="button" class="ghost">Trocar vez</button>
-            <button id="btn-foul" type="button" class="warn">Registrar falta (+4 rival)</button>
-          </div>
-
-          <div class="quick-points">
-            <p>Ajuste manual de pontos</p>
-            <div id="manual-buttons" class="manual-buttons"></div>
-          </div>
+          <article class="card">
+            <h3>Rosto B</h3>
+            <input id="file-b" type="file" accept="image/*" />
+            <canvas id="canvas-b" width="480" height="320"></canvas>
+            <p id="status-b" class="status">Aguardando imagem...</p>
+          </article>
         </div>
       </section>
 
-      <section class="card reveal delay-2">
-        <h2>Monitoramento da mesa</h2>
-        <div class="camera-grid">
-          <div class="camera-panel">
-            <div class="video-stack">
-              <video id="video" playsinline autoplay muted></video>
-              <canvas id="overlay-canvas"></canvas>
-            </div>
-            <canvas id="processing-canvas" class="hidden"></canvas>
-            <div class="camera-controls">
-              <button id="btn-camera" type="button">Ligar camera</button>
-              <button id="btn-stop-camera" type="button" class="ghost">Desligar</button>
-              <button id="btn-calibrate-table" type="button" class="ghost">Calibrar mesa (4 cliques)</button>
-              <button id="btn-clear-calibration" type="button" class="ghost">Limpar calibracao</button>
-              <button id="btn-calibrate-pockets" type="button" class="ghost">Calibrar cacapas (6 cliques)</button>
-              <button id="btn-clear-pockets" type="button" class="ghost">Limpar cacapas</button>
-            </div>
-          </div>
+      <section class="panel">
+        <h2>Comparacao</h2>
+        <div class="controls">
+          <label>
+            Limiar de similaridade
+            <input id="threshold" type="range" min="0.4" max="0.95" step="0.01" value="0.72" />
+          </label>
+          <p><strong>Limiar atual:</strong> <span id="threshold-value">0.72</span></p>
+          <button id="compare-btn" type="button">Comparar rostos</button>
+        </div>
 
-          <div class="motion-panel">
-            <label>
-              Sensibilidade (movimento %)
-              <input id="threshold" type="range" min="1" max="20" value="6" />
-            </label>
-            <p><strong>Threshold atual:</strong> <span id="threshold-value">6%</span></p>
-            <p><strong>Nivel de movimento:</strong> <span id="motion-value">0.00%</span></p>
-            <p><strong>Estado:</strong> <span id="motion-state">Parado</span></p>
-            <div class="meter"><div id="meter-fill" class="meter-fill"></div></div>
-
-            <hr />
-
-            <p><strong>OpenCV:</strong> <span id="opencv-state">carregando...</span></p>
-            <p><strong>Foco camera:</strong> <span id="focus-state">nao configurado</span></p>
-            <label id="focus-auto-wrap" class="inline-control hidden">
-              <input id="focus-auto" type="checkbox" checked />
-              Autofoco
-            </label>
-            <label id="focus-manual-wrap" class="hidden">
-              Ajuste de foco manual
-              <input id="focus-range" type="range" min="0" max="100" step="1" value="50" />
-            </label>
-            <label class="inline-control">
-              <input id="auto-referee" type="checkbox" checked />
-              Ativar arbitragem automatica
-            </label>
-            <p><strong>Calibracao:</strong> <span id="calibration-state">automatica</span></p>
-            <p><strong>Calibracao cacapas:</strong> <span id="pocket-calibration-state">automatica</span></p>
-            <p><strong>Mesa:</strong> <span id="table-state">nao detectada</span></p>
-            <p><strong>Cacapas:</strong> <span id="pockets-state">0/6</span></p>
-            <p><strong>Bolas vistas:</strong> <span id="detected-balls">nenhuma</span></p>
-            <p class="tip">Use boa iluminacao e enquadre a mesa inteira para reduzir falso positivo.</p>
-          </div>
+        <div class="result">
+          <p><strong>Status do modelo:</strong> <span id="model-state">Carregando...</span></p>
+          <p><strong>Similaridade:</strong> <span id="similarity">-</span></p>
+          <p><strong>Distancia:</strong> <span id="distance">-</span></p>
+          <p><strong>Veredito:</strong> <span id="verdict">-</span></p>
         </div>
       </section>
 
-      <section class="card reveal delay-3">
-        <h2 id="rules-title">Regras da sinuca brasileira (base)</h2>
-        <ol id="rules-list" class="rules"></ol>
-      </section>
-
-      <section class="card reveal delay-4">
-        <h2>Log da partida</h2>
-        <ul id="event-log" class="event-log"></ul>
-      </section>
-
-      <section class="card reveal delay-4">
-        <h2>Partidas recentes</h2>
-        <ul id="recent-matches" class="event-log"></ul>
+      <section class="panel">
+        <h2>Notas</h2>
+        <ul class="notes">
+          <li>Use imagens com rosto frontal e boa iluminacao.</li>
+          <li>A comparacao e estatistica; nao use como autenticacao critica.</li>
+          <li>Rostos parcialmente cobertos reduzem a precisao.</li>
+        </ul>
       </section>
     </main>
 
-    <script src="app.js"></script>
+    <script type="module" src="app.js"></script>
   </body>
 </html>

@@ -91,27 +91,34 @@ function buildDescriptor(face) {
   return normalizeVector(out);
 }
 
-function drawFace(canvas, image, face) {
+function drawFaces(canvas, image, faces, primaryIndex) {
   const ctx = canvas.getContext('2d');
   canvas.width = image.width;
   canvas.height = image.height;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(image, 0, 0);
 
-  if (!face) {
+  if (!faces || !faces.length) {
     return;
   }
 
-  const box = face.box;
-  ctx.strokeStyle = '#f2b84b';
-  ctx.lineWidth = 3;
-  ctx.strokeRect(box.xMin, box.yMin, box.width, box.height);
+  for (let i = 0; i < faces.length; i += 1) {
+    const face = faces[i];
+    const box = face.box;
+    const isPrimary = i === primaryIndex;
 
-  ctx.fillStyle = 'rgba(121, 223, 149, 0.9)';
-  for (const kp of face.keypoints) {
-    ctx.beginPath();
-    ctx.arc(kp.x, kp.y, 1.2, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.strokeStyle = isPrimary ? '#f2b84b' : 'rgba(121, 223, 149, 0.8)';
+    ctx.lineWidth = isPrimary ? 3 : 1.5;
+    ctx.strokeRect(box.xMin, box.yMin, box.width, box.height);
+
+    if (isPrimary) {
+      ctx.fillStyle = 'rgba(121, 223, 149, 0.9)';
+      for (const kp of face.keypoints) {
+        ctx.beginPath();
+        ctx.arc(kp.x, kp.y, 1.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 }
 
@@ -129,12 +136,28 @@ function loadImageFromFile(file) {
   });
 }
 
-async function detectSingleFace(image) {
+async function detectFaces(image) {
   const faces = await state.detector.estimateFaces(image, { flipHorizontal: false });
+  return faces || [];
+}
+
+function pickPrimaryFace(faces) {
   if (!faces.length) {
-    return null;
+    return { face: null, index: -1 };
   }
-  return faces[0];
+
+  let bestIndex = 0;
+  let bestArea = 0;
+  for (let i = 0; i < faces.length; i += 1) {
+    const box = faces[i].box;
+    const area = box.width * box.height;
+    if (area > bestArea) {
+      bestArea = area;
+      bestIndex = i;
+    }
+  }
+
+  return { face: faces[bestIndex], index: bestIndex };
 }
 
 async function processInput(file, canvas, statusEl, slot) {
@@ -145,10 +168,11 @@ async function processInput(file, canvas, statusEl, slot) {
   try {
     setText(statusEl, 'Processando rosto...', 'status warn');
     const image = await loadImageFromFile(file);
-    const face = await detectSingleFace(image);
+    const faces = await detectFaces(image);
+    const { face, index } = pickPrimaryFace(faces);
 
     if (!face) {
-      drawFace(canvas, image, null);
+      drawFaces(canvas, image, [], -1);
       if (slot === 'A') {
         state.descriptorA = null;
       } else {
@@ -160,7 +184,7 @@ async function processInput(file, canvas, statusEl, slot) {
 
     const descriptor = buildDescriptor(face);
     if (!descriptor) {
-      drawFace(canvas, image, face);
+      drawFaces(canvas, image, faces, index);
       if (slot === 'A') {
         state.descriptorA = null;
       } else {
@@ -170,7 +194,7 @@ async function processInput(file, canvas, statusEl, slot) {
       return;
     }
 
-    drawFace(canvas, image, face);
+    drawFaces(canvas, image, faces, index);
 
     if (slot === 'A') {
       state.descriptorA = descriptor;
@@ -178,7 +202,11 @@ async function processInput(file, canvas, statusEl, slot) {
       state.descriptorB = descriptor;
     }
 
-    setText(statusEl, 'Rosto detectado com sucesso.', 'status ok');
+    if (faces.length > 1) {
+      setText(statusEl, `Multiplos rostos detectados (${faces.length}). Usando o maior rosto.`, 'status warn');
+    } else {
+      setText(statusEl, 'Rosto detectado com sucesso.', 'status ok');
+    }
   } catch (_error) {
     if (slot === 'A') {
       state.descriptorA = null;
@@ -221,7 +249,7 @@ async function initModel() {
   state.detector = await faceLandmarksDetection.createDetector(model, {
     runtime: 'tfjs',
     refineLandmarks: true,
-    maxFaces: 1,
+    maxFaces: 5,
   });
 
   setText(refs.modelState, 'Modelo pronto', 'ok');

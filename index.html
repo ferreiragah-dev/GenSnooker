@@ -1,0 +1,110 @@
+﻿<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GenSnooker - Sinuca Brasileira</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="bg-shape bg-shape-a"></div>
+    <div class="bg-shape bg-shape-b"></div>
+
+    <main class="layout">
+      <header class="hero reveal">
+        <h1>GenSnooker</h1>
+        <p>Monitoramento por camera + regras da sinuca brasileira</p>
+      </header>
+
+      <section class="card reveal delay-1">
+        <h2>Partida</h2>
+        <form id="match-form" class="match-form">
+          <label>
+            Jogador 1
+            <input id="player-a" type="text" value="Jogador 1" maxlength="24" />
+          </label>
+          <label>
+            Jogador 2
+            <input id="player-b" type="text" value="Jogador 2" maxlength="24" />
+          </label>
+          <label>
+            Pontos para vencer
+            <input id="target-points" type="number" value="30" min="1" max="999" />
+          </label>
+          <button type="submit">Iniciar partida</button>
+        </form>
+
+        <div id="scoreboard" class="scoreboard hidden">
+          <div class="players">
+            <article id="p0" class="player"></article>
+            <article id="p1" class="player"></article>
+          </div>
+
+          <div class="meta">
+            <p><strong>Vez:</strong> <span id="turn-label">-</span></p>
+            <p><strong>Bola da vez:</strong> <span id="ball-label">1</span></p>
+            <p><strong>Status:</strong> <span id="status-label">Aguardando inicio</span></p>
+          </div>
+
+          <div class="actions">
+            <button id="btn-pot" type="button">Encacapou bola da vez</button>
+            <button id="btn-turn" type="button" class="ghost">Trocar vez</button>
+            <button id="btn-foul" type="button" class="warn">Registrar falta (+4 rival)</button>
+          </div>
+
+          <div class="quick-points">
+            <p>Ajuste manual de pontos</p>
+            <div id="manual-buttons" class="manual-buttons"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card reveal delay-2">
+        <h2>Monitoramento da mesa</h2>
+        <div class="camera-grid">
+          <div class="camera-panel">
+            <video id="video" playsinline autoplay muted></video>
+            <canvas id="processing-canvas" class="hidden"></canvas>
+            <div class="camera-controls">
+              <button id="btn-camera" type="button">Ligar camera</button>
+              <button id="btn-stop-camera" type="button" class="ghost">Desligar</button>
+            </div>
+          </div>
+
+          <div class="motion-panel">
+            <label>
+              Sensibilidade (movimento %)
+              <input id="threshold" type="range" min="1" max="20" value="6" />
+            </label>
+            <p><strong>Threshold atual:</strong> <span id="threshold-value">6%</span></p>
+            <p><strong>Nivel de movimento:</strong> <span id="motion-value">0.00%</span></p>
+            <p><strong>Estado:</strong> <span id="motion-state">Parado</span></p>
+            <div class="meter">
+              <div id="meter-fill" class="meter-fill"></div>
+            </div>
+            <p class="tip">Dica: posicione a camera com a mesa inteira visivel e pouca vibracao.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card reveal delay-3">
+        <h2>Regras da sinuca brasileira (base)</h2>
+        <ol class="rules">
+          <li>Partida com 2 jogadores, alternando a vez por jogada ou falta.</li>
+          <li>Bolas pontuadas por valor: 1 a 7 pontos, em ordem crescente de bola da vez.</li>
+          <li>Encacapar a bola da vez soma pontos e mantem a vez do jogador.</li>
+          <li>Falta comum registrada aqui concede 4 pontos ao adversario e troca a vez.</li>
+          <li>Vence quem atingir ou ultrapassar a meta de pontos configurada.</li>
+        </ol>
+        <p class="note">Ajuste as regras para o formato local do seu jogo se houver variacoes regionais.</p>
+      </section>
+
+      <section class="card reveal delay-4">
+        <h2>Log da partida</h2>
+        <ul id="event-log" class="event-log"></ul>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

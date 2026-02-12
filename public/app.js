@@ -107,6 +107,13 @@ const OPENCV_SOURCES = [
 
 const WARP_WIDTH = 960;
 const WARP_HEIGHT = 480;
+const TRACKING_CONFIG = {
+  tableInset: 18,
+  minRadiusPx: 4,
+  maxRadiusPx: 18,
+  minCircularity: 0.62,
+  maxPerColor: 1,
+};
 
 function timestamp() {
   return new Date().toLocaleTimeString('pt-BR', {
@@ -485,27 +492,81 @@ function buildMaskFromProfile(hsv, profile) {
 function detectColorCircles(hsv, profile) {
   const cv = window.cv;
   const mask = buildMaskFromProfile(hsv, profile);
-  const circles = new cv.Mat();
+  const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(5, 5));
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+  const roiMask = new cv.Mat.zeros(hsv.rows, hsv.cols, cv.CV_8UC1);
+  const inset = TRACKING_CONFIG.tableInset;
+  const roiWidth = Math.max(1, hsv.cols - (inset * 2));
+  const roiHeight = Math.max(1, hsv.rows - (inset * 2));
+  const roiRect = new cv.Rect(inset, inset, roiWidth, roiHeight);
+  const roi = roiMask.roi(roiRect);
+  roi.setTo(new cv.Scalar(255));
+  roi.delete();
 
   try {
-    cv.GaussianBlur(mask, mask, new cv.Size(7, 7), 0, 0, cv.BORDER_DEFAULT);
-    cv.HoughCircles(mask, circles, cv.HOUGH_GRADIENT, 1.2, 16, 75, 14, 4, 20);
+    cv.bitwise_and(mask, roiMask, mask);
+    cv.morphologyEx(mask, mask, cv.MORPH_OPEN, kernel);
+    cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
+    cv.findContours(mask, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
+    const minArea = Math.PI * TRACKING_CONFIG.minRadiusPx * TRACKING_CONFIG.minRadiusPx;
+    const maxArea = Math.PI * TRACKING_CONFIG.maxRadiusPx * TRACKING_CONFIG.maxRadiusPx;
     const found = [];
-    for (let i = 0; i < circles.cols; i += 1) {
-      const base = i * 4;
+    for (let i = 0; i < contours.size(); i += 1) {
+      const contour = contours.get(i);
+      const area = cv.contourArea(contour);
+      if (area < minArea || area > maxArea) {
+        contour.delete();
+        continue;
+      }
+
+      const perimeter = cv.arcLength(contour, true);
+      if (!perimeter) {
+        contour.delete();
+        continue;
+      }
+
+      const circularity = (4 * Math.PI * area) / (perimeter * perimeter);
+      if (circularity < TRACKING_CONFIG.minCircularity) {
+        contour.delete();
+        continue;
+      }
+
+      const moments = cv.moments(contour);
+      if (!moments.m00) {
+        contour.delete();
+        continue;
+      }
+
+      const x = moments.m10 / moments.m00;
+      const y = moments.m01 / moments.m00;
+      const r = Math.sqrt(area / Math.PI);
+      const score = circularity * area;
       found.push({
-        x: circles.data32F[base],
-        y: circles.data32F[base + 1],
-        r: circles.data32F[base + 2],
+        x,
+        y,
+        r,
+        score,
       });
+      contour.delete();
     }
+
     mask.delete();
-    circles.delete();
-    return found.sort((a, b) => b.r - a.r);
+    roiMask.delete();
+    kernel.delete();
+    contours.delete();
+    hierarchy.delete();
+    return found
+      .sort((a, b) => b.score - a.score)
+      .slice(0, TRACKING_CONFIG.maxPerColor)
+      .map(({ x, y, r }) => ({ x, y, r }));
   } catch (_error) {
     mask.delete();
-    circles.delete();
+    roiMask.delete();
+    kernel.delete();
+    contours.delete();
+    hierarchy.delete();
     return [];
   }
 }
@@ -803,7 +864,7 @@ function opencvDetectionLoop() {
 
     for (const key of Object.keys(BALL_PROFILES)) {
       const circlesWarped = detectColorCircles(warpedHsv, BALL_PROFILES[key]);
-      trackedBalls[key] = circlesWarped.slice(0, 3).map((circle) => mapCircleFromWarp(circle, perspective.inverse));
+      trackedBalls[key] = circlesWarped.map((circle) => mapCircleFromWarp(circle, perspective.inverse));
       seen[key] = circlesWarped.length > 0;
     }
 

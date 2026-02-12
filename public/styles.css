@@ -234,7 +234,8 @@ video {
   width: 100%;
   height: 100%;
   border-radius: 14px;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: crosshair;
 }
 
 .camera-controls {

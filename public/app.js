@@ -18,6 +18,9 @@ const state = {
   pendingStateWrite: false,
   cvReady: false,
   autoReferee: true,
+  calibrationMode: false,
+  calibrationPoints: [],
+  manualTableQuad: null,
   frameCounter: 0,
   tableQuad: null,
   pockets: [],
@@ -49,6 +52,8 @@ const refs = {
   canvas: document.querySelector('#processing-canvas'),
   btnCamera: document.querySelector('#btn-camera'),
   btnStopCamera: document.querySelector('#btn-stop-camera'),
+  btnCalibrateTable: document.querySelector('#btn-calibrate-table'),
+  btnClearCalibration: document.querySelector('#btn-clear-calibration'),
   btnPot: document.querySelector('#btn-pot'),
   btnTurn: document.querySelector('#btn-turn'),
   btnFoul: document.querySelector('#btn-foul'),
@@ -65,6 +70,7 @@ const refs = {
   matchId: document.querySelector('#match-id'),
   secureBanner: document.querySelector('#secure-banner'),
   opencvState: document.querySelector('#opencv-state'),
+  calibrationState: document.querySelector('#calibration-state'),
   tableState: document.querySelector('#table-state'),
   pocketsState: document.querySelector('#pockets-state'),
   detectedBalls: document.querySelector('#detected-balls'),
@@ -113,6 +119,7 @@ const TRACKING_CONFIG = {
   maxRadiusPx: 18,
   minCircularity: 0.62,
   maxPerColor: 1,
+  smoothingAlpha: 0.42,
 };
 
 function timestamp() {
@@ -422,13 +429,17 @@ function stopCamera() {
   refs.video.srcObject = null;
   state.prevGray = null;
   state.moving = false;
+  state.calibrationMode = false;
+  state.calibrationPoints = [];
   state.tableQuad = null;
+  state.manualTableQuad = null;
   state.pockets = [];
   state.trackedBalls = {};
   refs.motionState.textContent = 'Parado';
   refs.motionValue.textContent = '0.00%';
   refs.meterFill.style.width = '0%';
   refs.tableState.textContent = 'nao detectada';
+  refs.calibrationState.textContent = 'automatica';
   refs.pocketsState.textContent = '0/6';
   refs.detectedBalls.textContent = 'nenhuma';
   if (overlayCtx) {
@@ -721,6 +732,93 @@ function mapCircleFromWarp(circle, inverseMatrix) {
   };
 }
 
+function smoothTrackedBalls(nextTrackedBalls) {
+  const alpha = TRACKING_CONFIG.smoothingAlpha;
+  const smoothed = {};
+
+  for (const key of Object.keys(BALL_PROFILES)) {
+    const prev = state.trackedBalls[key] && state.trackedBalls[key][0];
+    const curr = nextTrackedBalls[key] && nextTrackedBalls[key][0];
+
+    if (prev && curr) {
+      smoothed[key] = [{
+        x: (prev.x * (1 - alpha)) + (curr.x * alpha),
+        y: (prev.y * (1 - alpha)) + (curr.y * alpha),
+        r: (prev.r * (1 - alpha)) + (curr.r * alpha),
+      }];
+    } else {
+      smoothed[key] = curr ? [curr] : [];
+    }
+  }
+
+  return smoothed;
+}
+
+function refreshCalibrationState() {
+  if (state.calibrationMode) {
+    refs.calibrationState.textContent = `capturando cantos (${state.calibrationPoints.length}/4)`;
+    return;
+  }
+
+  refs.calibrationState.textContent = state.manualTableQuad ? 'manual' : 'automatica';
+}
+
+function canvasClickToFramePoint(event, frameWidth, frameHeight) {
+  const rect = refs.overlayCanvas.getBoundingClientRect();
+  const xNorm = (event.clientX - rect.left) / rect.width;
+  const yNorm = (event.clientY - rect.top) / rect.height;
+  return {
+    x: xNorm * frameWidth,
+    y: yNorm * frameHeight,
+  };
+}
+
+function onOverlayClick(event) {
+  if (!state.calibrationMode || !state.stream) {
+    return;
+  }
+
+  const frameWidth = 640;
+  const frameHeight = 360;
+  const point = canvasClickToFramePoint(event, frameWidth, frameHeight);
+  state.calibrationPoints.push(point);
+
+  if (state.calibrationPoints.length === 4) {
+    state.manualTableQuad = orderQuadCorners(state.calibrationPoints);
+    state.tableQuad = state.manualTableQuad;
+    state.calibrationMode = false;
+    state.calibrationPoints = [];
+    logEvent('Calibracao manual da mesa concluida.', { eventType: 'table_calibrated' });
+  }
+
+  refreshCalibrationState();
+}
+
+function startManualCalibration() {
+  if (!state.stream) {
+    logEvent('Ligue a camera antes de calibrar a mesa.', { persist: false });
+    return;
+  }
+
+  state.calibrationMode = true;
+  state.calibrationPoints = [];
+  state.manualTableQuad = null;
+  refreshCalibrationState();
+  logEvent('Calibracao iniciada: clique nos 4 cantos internos da mesa (sup-esq, sup-dir, inf-dir, inf-esq).', {
+    eventType: 'table_calibration_start',
+  });
+}
+
+function clearManualCalibration() {
+  state.calibrationMode = false;
+  state.calibrationPoints = [];
+  state.manualTableQuad = null;
+  refreshCalibrationState();
+  logEvent('Calibracao manual removida. Voltando para deteccao automatica.', {
+    eventType: 'table_calibration_cleared',
+  });
+}
+
 function summarizeTrackedBalls(trackedBalls) {
   const keys = Object.keys(trackedBalls).filter((k) => trackedBalls[k] && trackedBalls[k].length);
   if (!keys.length) {
@@ -789,6 +887,16 @@ function drawTrackingOverlay(frameWidth, frameHeight) {
     overlayCtx.stroke();
   }
 
+  if (state.calibrationMode && state.calibrationPoints.length) {
+    for (const point of state.calibrationPoints) {
+      const p = toOverlayPoint(point, frameWidth, frameHeight);
+      overlayCtx.beginPath();
+      overlayCtx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+      overlayCtx.fillStyle = 'rgba(255, 140, 140, 0.95)';
+      overlayCtx.fill();
+    }
+  }
+
   for (const pocket of state.pockets) {
     const p = toOverlayPoint(pocket, frameWidth, frameHeight);
     const r = (pocket.r / frameWidth) * width;
@@ -843,7 +951,7 @@ function opencvDetectionLoop() {
   cv.cvtColor(src, hsv, cv.COLOR_RGBA2RGB);
   cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
 
-  const tableQuad = detectTableQuad(hsv);
+  const tableQuad = state.manualTableQuad || detectTableQuad(hsv);
   state.tableQuad = tableQuad;
   refs.tableState.textContent = tableQuad ? 'detectada' : 'nao detectada';
 
@@ -879,14 +987,15 @@ function opencvDetectionLoop() {
     }
   }
 
+  const filteredTrackedBalls = smoothTrackedBalls(trackedBalls);
   state.pockets = projectedPockets;
-  state.trackedBalls = trackedBalls;
-  const nearPocketCount = countBallsNearPockets(trackedBalls, projectedPockets);
+  state.trackedBalls = filteredTrackedBalls;
+  const nearPocketCount = countBallsNearPockets(filteredTrackedBalls, projectedPockets);
   refs.pocketsState.textContent = `${projectedPockets.length}/6 | bolas perto: ${nearPocketCount}`;
 
   src.delete();
   hsv.delete();
-  refs.detectedBalls.textContent = summarizeTrackedBalls(trackedBalls);
+  refs.detectedBalls.textContent = summarizeTrackedBalls(filteredTrackedBalls);
   drawTrackingOverlay(width, height);
 
   for (const key of Object.keys(state.missingCounters)) {
@@ -1089,6 +1198,9 @@ function bindEvents() {
   refs.btnFoul.addEventListener('click', () => onFoul('manual'));
   refs.btnCamera.addEventListener('click', startCamera);
   refs.btnStopCamera.addEventListener('click', stopCamera);
+  refs.btnCalibrateTable.addEventListener('click', startManualCalibration);
+  refs.btnClearCalibration.addEventListener('click', clearManualCalibration);
+  refs.overlayCanvas.addEventListener('click', onOverlayClick);
   refs.threshold.addEventListener('input', onThresholdChange);
   refs.autoReferee.addEventListener('change', (event) => {
     state.autoReferee = event.target.checked;
@@ -1108,6 +1220,7 @@ function init() {
   buildManualButtons();
   renderScoreboard();
   onThresholdChange();
+  refreshCalibrationState();
   checkSecureContext();
   initOpenCv();
   loadRecentMatches();

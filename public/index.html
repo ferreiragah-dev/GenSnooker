@@ -21,6 +21,14 @@
         <h2>Partida</h2>
         <form id="match-form" class="match-form">
           <label>
+            Modalidade
+            <select id="game-type">
+              <option value="sinuca_brasileira" selected>Sinuca Brasileira</option>
+              <option value="bilhar">Bilhar</option>
+              <option value="eight_ball">8 Ball</option>
+            </select>
+          </label>
+          <label>
             Jogador 1
             <input id="player-a" type="text" value="Jogador 1" maxlength="24" />
           </label>
@@ -43,6 +51,7 @@
 
           <div class="meta">
             <p><strong>Match ID:</strong> <span id="match-id">-</span></p>
+            <p><strong>Jogo:</strong> <span id="game-label">Sinuca Brasileira</span></p>
             <p><strong>Vez:</strong> <span id="turn-label">-</span></p>
             <p><strong>Bola da vez:</strong> <span id="ball-label">1</span></p>
             <p><strong>Status:</strong> <span id="status-label">Aguardando inicio</span></p>
@@ -109,14 +118,8 @@
       </section>
 
       <section class="card reveal delay-3">
-        <h2>Regras da sinuca brasileira (base)</h2>
-        <ol class="rules">
-          <li>Partida com 2 jogadores, alternando a vez por jogada ou falta.</li>
-          <li>Bolas pontuadas por valor: 1 a 7 pontos, em ordem crescente de bola da vez.</li>
-          <li>Encacapar a bola da vez soma pontos e mantem a vez do jogador.</li>
-          <li>Falta comum concede 4 pontos ao adversario e troca a vez.</li>
-          <li>Vence quem atingir ou ultrapassar a meta de pontos configurada.</li>
-        </ol>
+        <h2 id="rules-title">Regras da sinuca brasileira (base)</h2>
+        <ol id="rules-list" class="rules"></ol>
       </section>
 
       <section class="card reveal delay-4">

@@ -40,6 +40,7 @@ async function initDb() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS matches (
       id BIGSERIAL PRIMARY KEY,
+      game_type TEXT NOT NULL DEFAULT 'sinuca_brasileira',
       player_a TEXT NOT NULL,
       player_b TEXT NOT NULL,
       target_points INTEGER NOT NULL CHECK (target_points > 0),
@@ -52,6 +53,11 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+
+  await pool.query(`
+    ALTER TABLE matches
+    ADD COLUMN IF NOT EXISTS game_type TEXT NOT NULL DEFAULT 'sinuca_brasileira';
   `);
 
   await pool.query(`
@@ -104,7 +110,7 @@ app.get('/api/matches', asyncHandler(async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50);
   const { rows } = await pool.query(
     `
-      SELECT id, player_a, player_b, target_points, score_a, score_b, current_player, current_ball, status, winner, created_at, updated_at
+      SELECT id, game_type, player_a, player_b, target_points, score_a, score_b, current_player, current_ball, status, winner, created_at, updated_at
       FROM matches
       ORDER BY id DESC
       LIMIT $1
@@ -115,6 +121,9 @@ app.get('/api/matches', asyncHandler(async (req, res) => {
 }));
 
 app.post('/api/matches', asyncHandler(async (req, res) => {
+  const allowedGameTypes = new Set(['sinuca_brasileira', 'bilhar', 'eight_ball']);
+  const gameTypeRaw = String(req.body.gameType || 'sinuca_brasileira').trim();
+  const gameType = allowedGameTypes.has(gameTypeRaw) ? gameTypeRaw : 'sinuca_brasileira';
   const playerA = String(req.body.playerA || '').trim() || 'Jogador 1';
   const playerB = String(req.body.playerB || '').trim() || 'Jogador 2';
   const targetPoints = Math.min(Math.max(Number(req.body.targetPoints) || 30, 1), 999);
@@ -122,11 +131,11 @@ app.post('/api/matches', asyncHandler(async (req, res) => {
   const result = await withTransaction(async (client) => {
     const insertedMatch = await client.query(
       `
-        INSERT INTO matches (player_a, player_b, target_points, score_a, score_b, current_player, current_ball, status)
-        VALUES ($1, $2, $3, 0, 0, 0, 1, 'running')
+        INSERT INTO matches (game_type, player_a, player_b, target_points, score_a, score_b, current_player, current_ball, status)
+        VALUES ($1, $2, $3, $4, 0, 0, 0, 1, 'running')
         RETURNING *
       `,
-      [playerA, playerB, targetPoints],
+      [gameType, playerA, playerB, targetPoints],
     );
 
     await client.query(
@@ -136,8 +145,8 @@ app.post('/api/matches', asyncHandler(async (req, res) => {
       `,
       [
         insertedMatch.rows[0].id,
-        `Nova partida: ${playerA} x ${playerB} (meta ${targetPoints} pts).`,
-        JSON.stringify({ playerA, playerB, targetPoints }),
+        `Nova partida (${gameType}): ${playerA} x ${playerB} (meta ${targetPoints} pts).`,
+        JSON.stringify({ gameType, playerA, playerB, targetPoints }),
       ],
     );
 
@@ -157,7 +166,7 @@ app.get('/api/matches/:id', asyncHandler(async (req, res) => {
   const [matchResult, eventResult] = await Promise.all([
     pool.query(
       `
-        SELECT id, player_a, player_b, target_points, score_a, score_b, current_player, current_ball, status, winner, created_at, updated_at
+        SELECT id, game_type, player_a, player_b, target_points, score_a, score_b, current_player, current_ball, status, winner, created_at, updated_at
         FROM matches
         WHERE id = $1
       `,
@@ -193,7 +202,7 @@ app.post('/api/matches/:id/state', asyncHandler(async (req, res) => {
   const scoreA = Math.max(0, Number(req.body.scoreA) || 0);
   const scoreB = Math.max(0, Number(req.body.scoreB) || 0);
   const currentPlayer = Number(req.body.currentPlayer) === 1 ? 1 : 0;
-  const currentBall = Math.min(Math.max(Number(req.body.currentBall) || 1, 1), 7);
+  const currentBall = Math.min(Math.max(Number(req.body.currentBall) || 1, 1), 15);
   const status = req.body.status === 'finished' ? 'finished' : 'running';
   const winner = req.body.winner ? String(req.body.winner) : null;
 

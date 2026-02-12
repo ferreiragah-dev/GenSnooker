@@ -1,5 +1,6 @@
 const state = {
   matchId: null,
+  gameType: 'sinuca_brasileira',
   players: ['Jogador 1', 'Jogador 2'],
   scores: [0, 0],
   currentPlayer: 0,
@@ -42,6 +43,7 @@ const state = {
 
 const refs = {
   form: document.querySelector('#match-form'),
+  gameType: document.querySelector('#game-type'),
   scoreboard: document.querySelector('#scoreboard'),
   p0: document.querySelector('#p0'),
   p1: document.querySelector('#p1'),
@@ -73,6 +75,7 @@ const refs = {
   targetPoints: document.querySelector('#target-points'),
   apiState: document.querySelector('#api-state'),
   matchId: document.querySelector('#match-id'),
+  gameLabel: document.querySelector('#game-label'),
   secureBanner: document.querySelector('#secure-banner'),
   opencvState: document.querySelector('#opencv-state'),
   calibrationState: document.querySelector('#calibration-state'),
@@ -81,6 +84,8 @@ const refs = {
   pocketsState: document.querySelector('#pockets-state'),
   detectedBalls: document.querySelector('#detected-balls'),
   autoReferee: document.querySelector('#auto-referee'),
+  rulesTitle: document.querySelector('#rules-title'),
+  rulesList: document.querySelector('#rules-list'),
 };
 
 const ctx = refs.canvas.getContext('2d', { willReadFrequently: true });
@@ -126,6 +131,54 @@ const TRACKING_CONFIG = {
   minCircularity: 0.62,
   maxPerColor: 1,
   smoothingAlpha: 0.42,
+};
+
+const GAME_MODES = {
+  sinuca_brasileira: {
+    label: 'Sinuca Brasileira',
+    targetPoints: 30,
+    maxBall: 7,
+    usesBallSequence: true,
+    rulesTitle: 'Regras da sinuca brasileira (base)',
+    rules: [
+      'Partida com 2 jogadores, alternando a vez por jogada ou falta.',
+      'Bolas pontuadas por valor de 1 a 7, em ordem da bola da vez.',
+      'Encacapar a bola da vez soma seus pontos e mantem a vez.',
+      'Falta comum concede 4 pontos ao adversario e troca a vez.',
+      'Vence quem atingir ou ultrapassar a meta configurada.',
+    ],
+    pointsForPot: (currentBall) => currentBall,
+  },
+  bilhar: {
+    label: 'Bilhar',
+    targetPoints: 15,
+    maxBall: 1,
+    usesBallSequence: false,
+    rulesTitle: 'Regras do bilhar (base)',
+    rules: [
+      'Partida por pontos em sequencia de tacadas.',
+      'Cada sucesso registrado soma 1 ponto.',
+      'Falta concede 1 ponto ao adversario e troca a vez.',
+      'Nao usa bola da vez fixa neste modo simplificado.',
+      'Vence quem atingir a meta de pontos.',
+    ],
+    pointsForPot: () => 1,
+  },
+  eight_ball: {
+    label: '8 Ball',
+    targetPoints: 8,
+    maxBall: 8,
+    usesBallSequence: true,
+    rulesTitle: 'Regras 8 Ball (base simplificada)',
+    rules: [
+      'Partida em turno alternado com registro de bolas encaçapadas.',
+      'Cada bola registrada soma 1 ponto.',
+      'A bola 8 finaliza quando um jogador completa a meta.',
+      'Falta concede 1 ponto ao adversario e troca a vez.',
+      'Use este modo como assistente de placar/monitoramento.',
+    ],
+    pointsForPot: () => 1,
+  },
 };
 
 function timestamp() {
@@ -215,6 +268,41 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function getGameMode(gameType = state.gameType) {
+  return GAME_MODES[gameType] || GAME_MODES.sinuca_brasileira;
+}
+
+function renderRulesForGame(gameType = state.gameType) {
+  const mode = getGameMode(gameType);
+  refs.rulesTitle.textContent = mode.rulesTitle;
+  refs.rulesList.innerHTML = '';
+  for (const rule of mode.rules) {
+    const li = document.createElement('li');
+    li.textContent = rule;
+    refs.rulesList.appendChild(li);
+  }
+}
+
+function applyGameMode(gameType, options = {}) {
+  const mode = getGameMode(gameType);
+  state.gameType = gameType;
+  state.maxBall = mode.maxBall;
+  if (options.resetBall !== false) {
+    state.currentBall = 1;
+  }
+  refs.gameLabel.textContent = mode.label;
+  renderRulesForGame(gameType);
+}
+
+function getPotPoints() {
+  const mode = getGameMode();
+  return mode.pointsForPot(state.currentBall);
+}
+
+function getFoulPoints() {
+  return state.gameType === 'sinuca_brasileira' ? 4 : 1;
+}
+
 function switchTurn() {
   state.currentPlayer = state.currentPlayer === 0 ? 1 : 0;
 }
@@ -256,10 +344,12 @@ function renderPlayerCard(index) {
 }
 
 function renderScoreboard() {
+  const mode = getGameMode();
   renderPlayerCard(0);
   renderPlayerCard(1);
+  refs.gameLabel.textContent = mode.label;
   refs.turnLabel.textContent = state.players[state.currentPlayer] ?? '-';
-  refs.ballLabel.textContent = String(state.currentBall);
+  refs.ballLabel.textContent = mode.usesBallSequence ? String(state.currentBall) : '-';
   refs.matchId.textContent = state.matchId ? String(state.matchId) : '-';
 
   if (!state.running) {
@@ -273,6 +363,11 @@ function renderScoreboard() {
 }
 
 function nextBall() {
+  const mode = getGameMode();
+  if (!mode.usesBallSequence) {
+    return;
+  }
+
   state.currentBall += 1;
   if (state.currentBall > state.maxBall) {
     state.currentBall = 1;
@@ -292,10 +387,10 @@ function buildManualButtons() {
   }
 }
 
-async function createMatchOnServer(playerA, playerB, targetPoints) {
+async function createMatchOnServer(gameType, playerA, playerB, targetPoints) {
   const data = await apiFetch('/api/matches', {
     method: 'POST',
-    body: JSON.stringify({ playerA, playerB, targetPoints }),
+    body: JSON.stringify({ gameType, playerA, playerB, targetPoints }),
   });
   return data.match;
 }
@@ -303,14 +398,17 @@ async function createMatchOnServer(playerA, playerB, targetPoints) {
 async function onStartMatch(event) {
   event.preventDefault();
 
+  const selectedGameType = refs.gameType.value;
+  const mode = getGameMode(selectedGameType);
   const a = refs.playerA.value.trim() || 'Jogador 1';
   const b = refs.playerB.value.trim() || 'Jogador 2';
-  const target = clamp(Number(refs.targetPoints.value) || 30, 1, 999);
+  const target = clamp(Number(refs.targetPoints.value) || mode.targetPoints, 1, 999);
 
   try {
-    const match = await createMatchOnServer(a, b, target);
+    const match = await createMatchOnServer(selectedGameType, a, b, target);
     setApiOnline(true);
     state.matchId = match.id;
+    applyGameMode(selectedGameType);
     state.players = [a, b];
     state.scores = [0, 0];
     state.currentPlayer = 0;
@@ -320,7 +418,7 @@ async function onStartMatch(event) {
 
     refs.scoreboard.classList.remove('hidden');
     renderScoreboard();
-    logEvent(`Nova partida: ${a} x ${b} (meta ${target} pts).`, { eventType: 'match_started', persist: false });
+    logEvent(`Nova partida (${mode.label}): ${a} x ${b} (meta ${target} pts).`, { eventType: 'match_started', persist: false });
     await loadRecentMatches();
   } catch (_error) {
     setApiOnline(false);
@@ -334,7 +432,8 @@ function onPotBall(source = 'manual') {
   }
 
   const ballValue = state.currentBall;
-  addPoints(state.currentPlayer, ballValue, `encacapou bola ${ballValue} (${source})`, source === 'opencv' ? 'opencv_pot' : 'pot');
+  const points = getPotPoints();
+  addPoints(state.currentPlayer, points, `encacapou bola ${ballValue} (${source})`, source === 'opencv' ? 'opencv_pot' : 'pot');
   nextBall();
   renderScoreboard();
   persistMatchState();
@@ -346,7 +445,8 @@ function onFoul(source = 'manual') {
   }
 
   const rival = getOpponentIndex();
-  addPoints(rival, 4, `falta do adversario (${source})`, source === 'opencv' ? 'opencv_foul' : 'foul');
+  const foulPoints = getFoulPoints();
+  addPoints(rival, foulPoints, `falta do adversario (${source})`, source === 'opencv' ? 'opencv_foul' : 'foul');
   switchTurn();
   renderScoreboard();
   persistMatchState();
@@ -378,7 +478,8 @@ async function loadRecentMatches() {
     for (const match of data.items) {
       const li = document.createElement('li');
       const winner = match.winner ? ` | vencedor: ${match.winner}` : '';
-      li.textContent = `#${match.id} ${match.player_a} ${match.score_a} x ${match.score_b} ${match.player_b} | ${match.status}${winner}`;
+      const mode = getGameMode(match.game_type);
+      li.textContent = `#${match.id} [${mode.label}] ${match.player_a} ${match.score_a} x ${match.score_b} ${match.player_b} | ${match.status}${winner}`;
       refs.recentMatches.appendChild(li);
     }
 
@@ -1171,6 +1272,14 @@ function onThresholdChange() {
   refs.thresholdValue.textContent = `${state.motionThreshold}%`;
 }
 
+function onGameTypeChange() {
+  const gameType = refs.gameType.value;
+  const mode = getGameMode(gameType);
+  applyGameMode(gameType, { resetBall: !state.running });
+  refs.targetPoints.value = String(mode.targetPoints);
+  renderScoreboard();
+}
+
 function updateOpencvStateUi() {
   if (state.cvReady) {
     refs.opencvState.textContent = 'pronto';
@@ -1268,6 +1377,7 @@ function bindEvents() {
   refs.btnClearPockets.addEventListener('click', clearPocketCalibration);
   refs.overlayCanvas.addEventListener('click', onOverlayClick);
   refs.threshold.addEventListener('input', onThresholdChange);
+  refs.gameType.addEventListener('change', onGameTypeChange);
   refs.autoReferee.addEventListener('change', (event) => {
     state.autoReferee = event.target.checked;
     logEvent(`Arbitragem automatica ${state.autoReferee ? 'ativada' : 'desativada'}.`, {
@@ -1283,6 +1393,9 @@ function bindEvents() {
 
 function init() {
   bindEvents();
+  applyGameMode(state.gameType);
+  refs.gameType.value = state.gameType;
+  refs.targetPoints.value = String(getGameMode().targetPoints);
   buildManualButtons();
   renderScoreboard();
   onThresholdChange();
